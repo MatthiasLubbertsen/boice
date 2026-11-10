@@ -23,6 +23,8 @@ type App struct {
 	auth  *Auth
 	ai    *AI
 	dict  *Dict
+
+	studygoBase string // overridable in tests
 }
 
 func newApp(cfg Config, store *Store) (*App, error) {
@@ -41,6 +43,13 @@ func (a *App) routes() http.Handler {
 	api.HandleFunc("GET /api/lists/{id}", a.handleList)
 	api.HandleFunc("PATCH /api/lists/{id}", a.handleUpdateList)
 	api.HandleFunc("DELETE /api/lists/{id}", a.handleDeleteList)
+	api.HandleFunc("GET /api/studygo/books", a.handleStudygoBooks)
+	api.HandleFunc("GET /api/studygo/books/{id}", a.handleStudygoBook)
+	api.HandleFunc("GET /api/studygo/chapters/{id}", a.handleStudygoChapter)
+	api.HandleFunc("GET /api/studygo/lists/{id}/preview", a.handleStudygoPreview)
+	api.HandleFunc("POST /api/studygo/search", a.handleStudygoSearch)
+	api.HandleFunc("POST /api/studygo/lists", a.handleStudygoLists)
+	api.HandleFunc("POST /api/studygo/import", a.handleStudygoImport)
 	api.HandleFunc("GET /api/subjects", a.handleSubjects)
 	api.HandleFunc("POST /api/subjects", a.handleCreateSubject)
 	api.HandleFunc("PATCH /api/subjects/{id}", a.handleRenameSubject)
