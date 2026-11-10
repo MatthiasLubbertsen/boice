@@ -92,13 +92,17 @@ export function loadSession(listId: number): Session | null {
   }
 }
 
-/** Parses pasted text: one pair per line, split by tab, ";", "=", " - " or ",". */
+/**
+ * Parses pasted text: one pair per line, split by tab, "=", ";", " - " or ",".
+ * Separators are tried in that order and only the first match splits the line,
+ * so punctuation inside the translation (e.g. "term=a, b; c") is left alone.
+ */
 export function parsePairs(text: string): { term: string; translation: string }[] {
   const out: { term: string; translation: string }[] = []
   for (const raw of text.split(/\r?\n/)) {
     const line = raw.trim()
     if (!line) continue
-    const sep = ['\t', ';', '=', ' – ', ' - ', ','].find((s) => line.includes(s))
+    const sep = ['\t', '=', ';', ' – ', ' - ', ','].find((s) => line.includes(s))
     if (!sep) continue
     const i = line.indexOf(sep)
     const strip = (s: string) => s.trim().replace(/^"(.*)"$/, '$1').trim()
