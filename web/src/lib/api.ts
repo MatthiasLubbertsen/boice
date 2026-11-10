@@ -62,6 +62,47 @@ export interface StudygoResult {
   error?: string
 }
 
+export interface BrowseFilter {
+  id: number
+  name: string
+}
+
+export interface BrowseBook {
+  id: number
+  title: string
+  publisher: string
+  grade: string
+  edition: string
+  subject: string
+}
+
+export interface BrowseList {
+  id: number
+  title: string
+  paragraph: string
+  words: number
+  imported: boolean
+  listId?: number
+}
+
+export interface BrowsePreview {
+  id: number
+  title: string
+  kind: ListKind
+  langA: string
+  langB: string
+  total: number
+  words: { term: string; translation: string }[]
+}
+
+export interface BrowseQuery {
+  subject?: number
+  track?: number
+  grade?: number
+  q?: string
+  offset?: number
+}
+
 export type ListFields = Pick<List, 'name' | 'langA' | 'langB' | 'recordMode' | 'kind' | 'subjectId'>
 
 export interface Word {
@@ -162,6 +203,19 @@ export const api = {
   scans: (id: number) => json<Scan[]>('GET', `/api/lists/${id}/scans`),
   deleteScan: (id: number) => json<void>('DELETE', `/api/scans/${id}`),
   studygoLists: (token: string) => json<{ lists: StudygoList[] }>('POST', '/api/studygo/lists', { token }),
+  studygoBooks: (query: BrowseQuery) => {
+    const p = new URLSearchParams()
+    for (const [k, v] of Object.entries(query)) if (v !== undefined && v !== '' && v !== 0) p.set(k, String(v))
+    return json<{ total: number; books: BrowseBook[]; subjects: BrowseFilter[]; levels: BrowseFilter[]; grades: string[] }>(
+      'GET',
+      `/api/studygo/books?${p}`,
+    )
+  },
+  studygoBook: (id: number) => json<{ id: number; title: string; chapters: BrowseFilter[] }>('GET', `/api/studygo/books/${id}`),
+  studygoChapter: (id: number) =>
+    json<{ id: number; title: string; book: string; lists: BrowseList[] }>('GET', `/api/studygo/chapters/${id}`),
+  studygoPreview: (id: number) => json<BrowsePreview>('GET', `/api/studygo/lists/${id}/preview`),
+  /** An empty token imports public (publisher and shared) lists, which need no login. */
   studygoImport: (token: string, ids: number[]) =>
     json<{ results: StudygoResult[] }>('POST', '/api/studygo/import', { token, ids }),
   subjects: () => json<Subject[]>('GET', '/api/subjects'),

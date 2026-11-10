@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -51,7 +52,9 @@ func (c *studygoClient) get(ctx context.Context, path string, out any) error {
 		return err
 	}
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("X-Auth-Token", c.token)
+	if c.token != "" { // the public endpoints (browsing, previews) need no login
+		req.Header.Set("X-Auth-Token", c.token)
+	}
 	req.Header.Set("X-Client-Type", "web")
 	req.Header.Set("X-Language-Code", "nl")
 	req.Header.Set("X-Locale-Code", "nl-NL")
@@ -165,8 +168,93 @@ type studygoData struct {
 
 func (c *studygoClient) data(ctx context.Context, id int64) (studygoData, error) {
 	var d studygoData
+	if c.token == "" {
+		return c.publicData(ctx, id)
+	}
 	err := c.get(ctx, fmt.Sprintf("lists/%d/data", id), &d)
 	return d, err
+}
+
+// publicData reads a list through the login-free endpoint the website uses for
+// shared and publisher lists. It has the same words in the same order, in a
+// different shape.
+func (c *studygoClient) publicData(ctx context.Context, id int64) (studygoData, error) {
+	var p struct {
+		Title                string `json:"title"`
+		WordsWithPerformance []struct {
+			Words []string `json:"words"`
+		} `json:"words_with_performance"`
+		Subject *struct {
+			Name string `json:"name"`
+		} `json:"subject"`
+		Locales []struct {
+			LanguageCode string `json:"language_code"`
+			Locale       string `json:"locale"`
+		} `json:"locales"`
+	}
+	if err := c.get(ctx, fmt.Sprintf("public/lists/%d", id), &p); err != nil {
+		return studygoData{}, err
+	}
+	d := studygoData{Title: p.Title, Subject: p.Subject}
+	d.WordsCollection = make([]struct {
+		Words []string `json:"words"`
+	}, len(p.WordsWithPerformance))
+	for i, w := range p.WordsWithPerformance {
+		d.WordsCollection[i].Words = w.Words
+	}
+	for _, l := range p.Locales {
+		code := l.LanguageCode
+		if code == "" {
+			code = l.Locale // "de" or "de-DE"
+		}
+		code = strings.ToLower(strings.SplitN(code, "-", 2)[0])
+		d.Locales = append(d.Locales, struct {
+			Language struct {
+				Code string `json:"code"`
+			} `json:"language"`
+		}{Language: struct {
+			Code string `json:"code"`
+		}{code}})
+	}
+	return d, nil
+}
+
+// shape works out what a Studygo list becomes in Boice: its languages, its
+// kind and its word pairs. Two languages make a word list; the same language
+// on both sides (a history glossary, say) makes terms and definitions.
+func (d studygoData) shape() (langA, langB, kind string, pairs [][2]string, err error) {
+	langA, langB = "de", "nl"
+	if len(d.Locales) > 0 {
+		langA = d.Locales[0].Language.Code
+		langB = langA
+	}
+	if len(d.Locales) > 1 {
+		langB = d.Locales[1].Language.Code
+	}
+	if !validLang(langA) || !validLang(langB) {
+		return "", "", "", nil, fmt.Errorf("unusable language codes %q/%q", langA, langB)
+	}
+	kind = "lang"
+	if langA == langB {
+		kind = "def"
+	}
+	for _, e := range d.WordsCollection {
+		if len(e.Words) < 2 {
+			continue
+		}
+		term, tr := cleanText(e.Words[0]), cleanText(e.Words[1])
+		if kind == "lang" {
+			term, tr = firstForm(term), firstForm(tr)
+		}
+		if term == "" && tr == "" {
+			continue
+		}
+		pairs = append(pairs, [2]string{limitRunes(term, 300), limitRunes(tr, 300)})
+	}
+	if len(pairs) > 5000 {
+		pairs = pairs[:5000]
+	}
+	return langA, langB, kind, pairs, nil
 }
 
 // ---- handlers ----
@@ -241,8 +329,8 @@ func (a *App) handleStudygoImport(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &in) {
 		return
 	}
-	token := cleanToken(in.Token)
-	if token == "" || len(in.IDs) == 0 {
+	token := cleanToken(in.Token) // empty = public lists only, no login needed
+	if len(in.IDs) == 0 {
 		writeErr(w, http.StatusBadRequest, "Pick at least one list.")
 		return
 	}
@@ -287,24 +375,11 @@ func (a *App) handleStudygoImport(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"results": results})
 }
 
-// importStudygo turns one Studygo list into a Boice list. Two different
-// languages make a word list; the same language on both sides (a history
-// glossary, say) makes a terms-and-definitions list.
+// importStudygo turns one Studygo list into a Boice list.
 func (a *App) importStudygo(owner string, studygoID int64, d studygoData) (listID int64, words int, err error) {
-	langA, langB := "de", "nl"
-	if len(d.Locales) > 0 {
-		langA = d.Locales[0].Language.Code
-		langB = langA
-	}
-	if len(d.Locales) > 1 {
-		langB = d.Locales[1].Language.Code
-	}
-	if !validLang(langA) || !validLang(langB) {
-		return 0, 0, fmt.Errorf("unusable language codes %q/%q", langA, langB)
-	}
-	kind := "lang"
-	if langA == langB {
-		kind = "def"
+	langA, langB, kind, pairs, err := d.shape()
+	if err != nil {
+		return 0, 0, err
 	}
 	name := limitRunes(cleanText(d.Title), 120)
 	if name == "" {
@@ -320,22 +395,9 @@ func (a *App) importStudygo(owner string, studygoID int64, d studygoData) (listI
 			subjectID = &id
 		}
 	}
-	var batch []Word
-	for _, e := range d.WordsCollection {
-		if len(e.Words) < 2 {
-			continue
-		}
-		term, tr := cleanText(e.Words[0]), cleanText(e.Words[1])
-		if kind == "lang" {
-			term, tr = firstForm(term), firstForm(tr)
-		}
-		if term == "" && tr == "" {
-			continue
-		}
-		batch = append(batch, Word{Term: limitRunes(term, 300), Translation: limitRunes(tr, 300)})
-	}
-	if len(batch) > 5000 {
-		batch = batch[:5000]
+	batch := make([]Word, len(pairs))
+	for i, p := range pairs {
+		batch[i] = Word{Term: p[0], Translation: p[1]}
 	}
 	listID, err = a.store.CreateList(owner, name, langA, langB, "a", kind, subjectID)
 	if err != nil {
@@ -350,4 +412,214 @@ func (a *App) importStudygo(owner string, studygoID int64, d studygoData) (listI
 		return 0, 0, err
 	}
 	return listID, len(added), nil
+}
+
+// ---- browsing: subject -> book -> chapter -> list, no login needed ----
+
+type browseFilter struct {
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+}
+
+type browseBook struct {
+	ID        int64  `json:"id"`
+	Title     string `json:"title"`
+	Publisher string `json:"publisher"`
+	Grade     string `json:"grade"`
+	Edition   string `json:"edition"`
+	Subject   string `json:"subject"`
+}
+
+func (a *App) handleStudygoBooks(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	params := url.Values{"type": {"books"}, "limit": {"24"}}
+	for _, k := range [][2]string{{"subject", "subject_id"}, {"track", "school_track_id"}} {
+		if v := q.Get(k[0]); v != "" {
+			if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
+				params.Set(k[1], strconv.FormatInt(n, 10))
+			}
+		}
+	}
+	if n, err := strconv.Atoi(q.Get("grade")); err == nil && n >= 1 && n <= 12 {
+		params.Set("grade_number", strconv.Itoa(n))
+	}
+	if n, err := strconv.Atoi(q.Get("offset")); err == nil && n > 0 && n <= 5000 {
+		params.Set("offset", strconv.Itoa(n))
+	}
+	if t := limitRunes(cleanText(q.Get("q")), 100); t != "" {
+		params.Set("search_terms", t)
+	}
+	var res struct {
+		Sections []struct {
+			Total   int `json:"total_count"`
+			Filters struct {
+				Subjects []struct {
+					ID   int64  `json:"id"`
+					Name string `json:"name"`
+				} `json:"subject_id"`
+				Tracks []struct {
+					Section string `json:"section_name"`
+					Tracks  []struct {
+						ID   int64  `json:"id"`
+						Name string `json:"name"`
+					} `json:"school_tracks"`
+				} `json:"school_track_id"`
+				Grades []string `json:"grade_number"`
+			} `json:"available_filters"`
+			Results []struct {
+				ID        json.Number `json:"id"`
+				Title     string      `json:"title"`
+				Publisher string      `json:"publisher_name"`
+				Grade     string      `json:"grade_display"`
+				Edition   json.Number `json:"edition_number"`
+				Subject   string      `json:"subject_name"`
+			} `json:"results"`
+		} `json:"result_sections"`
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	if err := a.studygo("").get(ctx, "public/search?"+params.Encode(), &res); err != nil {
+		a.writeStudygoErr(w, err)
+		return
+	}
+	out := struct {
+		Total    int            `json:"total"`
+		Books    []browseBook   `json:"books"`
+		Subjects []browseFilter `json:"subjects"`
+		Levels   []browseFilter `json:"levels"`
+		Grades   []string       `json:"grades"`
+	}{Books: []browseBook{}, Subjects: []browseFilter{}, Levels: []browseFilter{}, Grades: []string{}}
+	if len(res.Sections) > 0 {
+		s := res.Sections[0]
+		out.Total, out.Grades = s.Total, s.Filters.Grades
+		for _, f := range s.Filters.Subjects {
+			out.Subjects = append(out.Subjects, browseFilter{f.ID, f.Name})
+		}
+		for _, sec := range s.Filters.Tracks {
+			if sec.Section != "Nederland" {
+				continue
+			}
+			for _, t := range sec.Tracks {
+				out.Levels = append(out.Levels, browseFilter{t.ID, t.Name})
+			}
+		}
+		for _, b := range s.Results {
+			id, _ := b.ID.Int64()
+			out.Books = append(out.Books, browseBook{id, b.Title, b.Publisher, b.Grade, b.Edition.String(), b.Subject})
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (a *App) handleStudygoBook(w http.ResponseWriter, r *http.Request) {
+	id := pathID(r)
+	if id <= 0 {
+		writeErr(w, http.StatusBadRequest, "unknown book")
+		return
+	}
+	var res struct {
+		Title    string `json:"title"`
+		Chapters []struct {
+			ID    int64  `json:"id"`
+			Title string `json:"title"`
+		} `json:"chapters"`
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	if err := a.studygo("").get(ctx, fmt.Sprintf("public/books/%d", id), &res); err != nil {
+		a.writeStudygoErr(w, err)
+		return
+	}
+	chapters := []browseFilter{}
+	for _, c := range res.Chapters {
+		chapters = append(chapters, browseFilter{c.ID, c.Title})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"id": id, "title": res.Title, "chapters": chapters})
+}
+
+type browseList struct {
+	ID        int64  `json:"id"`
+	Title     string `json:"title"`
+	Paragraph string `json:"paragraph"`
+	Words     int    `json:"words"`
+	Imported  bool   `json:"imported"`
+	ListID    int64  `json:"listId,omitempty"`
+}
+
+func (a *App) handleStudygoChapter(w http.ResponseWriter, r *http.Request) {
+	id := pathID(r)
+	if id <= 0 {
+		writeErr(w, http.StatusBadRequest, "unknown chapter")
+		return
+	}
+	type item struct {
+		ID        int64  `json:"id"`
+		Title     string `json:"title"`
+		Paragraph string `json:"paragraph_display"`
+		WordCount string `json:"word_count_display"`
+	}
+	var res struct {
+		Chapter struct {
+			Title string `json:"title"`
+			Book  string `json:"book_name"`
+			Lists struct {
+				Highlighted []item `json:"highlighted"`
+				Other       []item `json:"other"`
+			} `json:"lists"`
+		} `json:"chapter"`
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	if err := a.studygo("").get(ctx, fmt.Sprintf("public/chapters/%d", id), &res); err != nil {
+		a.writeStudygoErr(w, err)
+		return
+	}
+	lists := []browseList{}
+	seen := map[int64]bool{}
+	for _, it := range append(res.Chapter.Lists.Highlighted, res.Chapter.Lists.Other...) {
+		if it.ID == 0 || seen[it.ID] {
+			continue
+		}
+		seen[it.ID] = true
+		bl := browseList{ID: it.ID, Title: it.Title, Paragraph: it.Paragraph, Words: firstNumber(it.WordCount)}
+		if lid, ok := a.store.ListByStudygoID(userFrom(r).ID, it.ID); ok {
+			bl.Imported, bl.ListID = true, lid
+		}
+		lists = append(lists, bl)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"id": id, "title": res.Chapter.Title, "book": res.Chapter.Book, "lists": lists})
+}
+
+type previewWord struct {
+	Term        string `json:"term"`
+	Translation string `json:"translation"`
+}
+
+// handleStudygoPreview shows the first words of a list as they would be imported.
+func (a *App) handleStudygoPreview(w http.ResponseWriter, r *http.Request) {
+	id := pathID(r)
+	if id <= 0 {
+		writeErr(w, http.StatusBadRequest, "unknown list")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	d, err := a.studygo("").data(ctx, id)
+	if err != nil {
+		a.writeStudygoErr(w, err)
+		return
+	}
+	langA, langB, kind, pairs, err := d.shape()
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, "That list uses a language Boice can't read.")
+		return
+	}
+	words := []previewWord{}
+	for _, p := range pairs[:min(len(pairs), 8)] {
+		words = append(words, previewWord{p[0], p[1]})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"id": id, "title": cleanText(d.Title), "kind": kind, "langA": langA, "langB": langB,
+		"total": len(pairs), "words": words,
+	})
 }

@@ -522,7 +522,98 @@ func fakeStudygo(t *testing.T) http.Handler {
 			"subject":{"id":23,"name":"duits"},
 			"locales":[{"language":{"code":"nl"}},{"language":{"code":"nl"}}]}`)
 	}))
+	// Public, login-free endpoints (shapes as observed on the real site).
+	mux.HandleFunc("GET /public/search", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		if q.Get("type") != "books" || q.Get("X-Auth-Token") != "" || r.Header.Get("X-Auth-Token") != "" {
+			t.Errorf("unexpected public search: %v token=%q", q, r.Header.Get("X-Auth-Token"))
+		}
+		title := "Na Klar!"
+		if q.Get("search_terms") == "neue" {
+			title = "Neue Kontakte"
+		}
+		_, _ = io.WriteString(w, `{"result_sections":[{"search_type":"books","total_count":54,
+			"available_filters":{"subject_id":[{"id":2,"name":"Duits"},{"id":3,"name":"Frans"}],
+			  "school_track_id":[{"section_name":"Nederland","school_tracks":[{"id":19,"name":"vwo"}]},{"section_name":"België","school_tracks":[{"id":99,"name":"aso"}]}],
+			  "grade_number":["1","2"]},
+			"results":[{"id":"1948","title":"`+title+`","publisher_name":"Malmberg","grade_display":"1/2 vwo","edition_number":5,"subject_name":"Duits"}]}]}`)
+	})
+	mux.HandleFunc("GET /public/books/1948", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"id":1948,"title":"Na Klar!","chapters":[{"id":20556,"title":"Kapitel 1: Berlin","title_number":"1"},{"id":20576,"title":"Kapitel 4: Wien"}]}`)
+	})
+	mux.HandleFunc("GET /public/chapters/20576", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"chapter":{"title":"Kapitel 4: Wien","book_name":"Na Klar!","lists":{
+			"highlighted":[{"id":185321117,"title":"Hoofdstuk 4.Lektion 1.1","paragraph_display":"Lektion 1.1","word_count_display":"22 woorden"}],
+			"other":[{"id":185321117,"title":"dupe","paragraph_display":"x","word_count_display":"1 woord"},{"id":5,"title":"Other","paragraph_display":"Lektion 2","word_count_display":"3 woorden"}]}}}`)
+	})
+	mux.HandleFunc("GET /public/lists/185321117", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Auth-Token") != "" {
+			t.Errorf("public list fetched with a token")
+		}
+		_, _ = io.WriteString(w, `{"id":185321117,"title":"Hoofdstuk 4.Lektion 1.1","subject":{"name":"Duits"},
+			"locales":[{"id":2,"locale":"de"},{"id":34,"locale":"nl-NL"}],
+			"words_with_performance":[
+			 {"words":["besuchen","bezoeken"],"all_results_performance":{}},
+			 {"words":["das Getränk | die Getränke","het drankje"]}]}`)
+	})
 	return mux
+}
+
+func TestStudygoBrowse(t *testing.T) {
+	h := newHarness(t, Config{AuthMode: "none"}, nil)
+	sg := httptest.NewServer(fakeStudygo(t))
+	t.Cleanup(sg.Close)
+	h.app.studygoBase = sg.URL
+
+	var books struct {
+		Total    int
+		Books    []browseBook
+		Subjects []browseFilter
+		Levels   []browseFilter
+		Grades   []string
+	}
+	if code := h.do("GET", "/api/studygo/books?subject=2&track=19&grade=1&q=neue&offset=24&subject=abc", nil, &books); code != 200 {
+		t.Fatalf("books: %d", code)
+	}
+	if books.Total != 54 || len(books.Books) != 1 || books.Books[0].ID != 1948 || books.Books[0].Title != "Neue Kontakte" ||
+		books.Books[0].Edition != "5" || len(books.Subjects) != 2 || len(books.Levels) != 1 || books.Levels[0].Name != "vwo" || len(books.Grades) != 2 {
+		t.Fatalf("books: %+v", books)
+	}
+	var book struct {
+		Chapters []browseFilter
+	}
+	h.do("GET", "/api/studygo/books/1948", nil, &book)
+	if len(book.Chapters) != 2 || book.Chapters[1].ID != 20576 {
+		t.Fatalf("chapters: %+v", book)
+	}
+	if code := h.do("GET", "/api/studygo/books/abc", nil, nil); code != 400 {
+		t.Fatalf("bad book id: %d", code)
+	}
+	var ch struct{ Lists []browseList }
+	h.do("GET", "/api/studygo/chapters/20576", nil, &ch)
+	if len(ch.Lists) != 2 || ch.Lists[0].Paragraph != "Lektion 1.1" || ch.Lists[0].Words != 22 || ch.Lists[1].ID != 5 {
+		t.Fatalf("lists: %+v", ch.Lists)
+	}
+	var pv struct {
+		Kind, LangA, LangB string
+		Total              int
+		Words              []previewWord
+	}
+	h.do("GET", "/api/studygo/lists/185321117/preview", nil, &pv)
+	if pv.Kind != "lang" || pv.LangA != "de" || pv.LangB != "nl" || pv.Total != 2 || pv.Words[1].Term != "das Getränk" {
+		t.Fatalf("preview: %+v", pv)
+	}
+
+	// Import without any token, then the chapter shows it as imported.
+	var imp struct{ Results []studygoResult }
+	if code := h.do("POST", "/api/studygo/import", map[string]any{"ids": []int64{185321117}}, &imp); code != 200 ||
+		imp.Results[0].Status != "imported" || imp.Results[0].Words != 2 {
+		t.Fatalf("public import: %d %+v", code, imp)
+	}
+	h.do("GET", "/api/studygo/chapters/20576", nil, &ch)
+	if !ch.Lists[0].Imported || ch.Lists[1].Imported {
+		t.Fatalf("imported flag: %+v", ch.Lists)
+	}
 }
 
 func TestStudygoImport(t *testing.T) {
