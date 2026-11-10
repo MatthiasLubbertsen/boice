@@ -480,3 +480,121 @@ func TestOIDCLogin(t *testing.T) {
 		t.Fatalf("after logout: %d", code)
 	}
 }
+
+// fakeStudygo serves the response shapes observed from the real Studygo site.
+func fakeStudygo(t *testing.T) http.Handler {
+	mux := http.NewServeMux()
+	guard := func(next http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("X-Auth-Token") != "good-token" {
+				w.WriteHeader(401)
+				_, _ = io.WriteString(w, `{"success":false,"error_type":"invalid_token"}`)
+				return
+			}
+			next(w, r)
+		}
+	}
+	mux.HandleFunc("GET /practiceable_items/created", guard(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"created_items":[
+			{"is_from_current_user":true,"item_count_display":"0 vragen","link":{"id":807096,"type":"user_quiz"},"title":"A quiz"},
+			{"id":181019509,"title":"Hoofdstuk 3","word_count_display":"2 woorden","status":"draft"}]}`)
+	}))
+	mux.HandleFunc("GET /recent_items", guard(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"recent_items":[
+			{"link":{"type":"user_quiz","id":804771},"title":"Quiz","item_count_display":"44 vragen"},
+			{"link":{"type":"list","id":185321117},"title":"Lektion 1.1","item_count_display":"3 woorden","is_from_current_user":false},
+			{"link":{"type":"list","id":181019509},"title":"Hoofdstuk 3","item_count_display":"2 woorden","is_from_current_user":true},
+			{"link":{"type":"topic","id":1757},"title":"Botten","item_count_display":"4 vragen"}],"total_count":4}`)
+	}))
+	mux.HandleFunc("GET /lists/185321117/data", guard(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"id":185321117,"title":"Hoofdstuk 4.Lektion 1.1","words_collection":[
+			{"words":["besuchen","bezoeken"]},
+			{"words":["das Getränk | die Getränke","het drankje"]},
+			{"words":["lonely"]},
+			{"words":["",""]}],
+			"subject":{"id":2,"name":"Duits"},
+			"locales":[{"language":{"code":"de"}},{"language":{"code":"nl"}}]}`)
+	}))
+	mux.HandleFunc("GET /lists/181019509/data", guard(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"id":181019509,"title":"Hoofdstuk 3","words_collection":[
+			{"words":["republiek","Een land waar geen koning of keizer aan het hoofd staat"]},
+			{"words":["senaat","Een vergadering die de Romeinse Republiek bestuurde"]}],
+			"subject":{"id":23,"name":"duits"},
+			"locales":[{"language":{"code":"nl"}},{"language":{"code":"nl"}}]}`)
+	}))
+	return mux
+}
+
+func TestStudygoImport(t *testing.T) {
+	h := newHarness(t, Config{AuthMode: "none"}, nil)
+	sg := httptest.NewServer(fakeStudygo(t))
+	t.Cleanup(sg.Close)
+	h.app.studygoBase = sg.URL
+
+	var out struct {
+		Lists []StudygoList
+		Error string
+	}
+	if code := h.do("POST", "/api/studygo/lists", map[string]string{"token": "bad"}, &out); code != 422 || out.Error == "" {
+		t.Fatalf("bad token: %d %+v", code, out)
+	}
+	if code := h.do("POST", "/api/studygo/lists", map[string]string{"token": " good-token "}, &out); code != 200 {
+		t.Fatalf("lists: %d", code)
+	}
+	// Quizzes and topics are left out, and a list in both indexes appears once.
+	if len(out.Lists) != 2 || out.Lists[0].ID != 181019509 || out.Lists[0].Words != 2 || !out.Lists[0].Own || out.Lists[1].ID != 185321117 || out.Lists[1].Own {
+		t.Fatalf("index: %+v", out.Lists)
+	}
+
+	var imp struct{ Results []studygoResult }
+	body := map[string]any{"token": "good-token", "ids": []int64{185321117, 181019509, 999}}
+	if code := h.do("POST", "/api/studygo/import", body, &imp); code != 200 || len(imp.Results) != 3 {
+		t.Fatalf("import: %d %+v", code, imp)
+	}
+	if r := imp.Results[0]; r.Status != "imported" || r.Words != 2 {
+		t.Fatalf("german list: %+v", r) // the one-sided and empty rows are dropped
+	}
+	if r := imp.Results[2]; r.Status != "error" || r.Error == "" {
+		t.Fatalf("unknown list should fail alone: %+v", r)
+	}
+
+	var de struct {
+		List  List
+		Words []Word
+	}
+	h.do("GET", fmt.Sprintf("/api/lists/%d", imp.Results[0].ListID), nil, &de)
+	if de.List.Kind != "lang" || de.List.LangA != "de" || de.List.LangB != "nl" || de.List.Name != "Hoofdstuk 4.Lektion 1.1" ||
+		de.Words[1].Term != "das Getränk" || de.Words[1].Translation != "het drankje" || de.Words[0].Term != "besuchen" {
+		t.Fatalf("german list wrong: %+v %+v", de.List, de.Words)
+	}
+	var hist struct {
+		List  List
+		Words []Word
+	}
+	h.do("GET", fmt.Sprintf("/api/lists/%d", imp.Results[1].ListID), nil, &hist)
+	if hist.List.Kind != "def" || hist.Words[0].Term != "republiek" || !strings.HasPrefix(hist.Words[0].Translation, "Een land") {
+		t.Fatalf("history list wrong: %+v %+v", hist.List, hist.Words)
+	}
+
+	// Subjects are created from Studygo's, matched ignoring case, and linked.
+	var subs []Subject
+	h.do("GET", "/api/subjects", nil, &subs)
+	if len(subs) != 1 || subs[0].Name != "Duits" || subs[0].ListCount != 2 {
+		t.Fatalf("subjects: %+v", subs)
+	}
+
+	// Importing again does not duplicate.
+	h.do("POST", "/api/studygo/import", map[string]any{"token": "good-token", "ids": []int64{185321117}}, &imp)
+	if imp.Results[0].Status != "exists" {
+		t.Fatalf("re-import: %+v", imp.Results)
+	}
+	h.do("POST", "/api/studygo/lists", map[string]string{"token": "good-token"}, &out)
+	if !out.Lists[0].Imported || !out.Lists[1].Imported {
+		t.Fatalf("imported flags: %+v", out.Lists)
+	}
+	var lists []List
+	h.do("GET", "/api/lists", nil, &lists)
+	if len(lists) != 2 {
+		t.Fatalf("expected 2 lists, got %d", len(lists))
+	}
+}

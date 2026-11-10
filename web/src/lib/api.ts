@@ -44,6 +44,24 @@ export interface Scan {
   createdAt: number
 }
 
+export interface StudygoList {
+  id: number
+  title: string
+  words: number
+  own: boolean
+  imported: boolean
+  listId?: number
+}
+
+export interface StudygoResult {
+  id: number
+  title: string
+  status: 'imported' | 'exists' | 'error'
+  listId?: number
+  words: number
+  error?: string
+}
+
 export type ListFields = Pick<List, 'name' | 'langA' | 'langB' | 'recordMode' | 'kind' | 'subjectId'>
 
 export interface Word {
@@ -143,6 +161,9 @@ export const api = {
   startScan: (id: number, image: Blob) => json<Scan>('POST', `/api/lists/${id}/scans`, image),
   scans: (id: number) => json<Scan[]>('GET', `/api/lists/${id}/scans`),
   deleteScan: (id: number) => json<void>('DELETE', `/api/scans/${id}`),
+  studygoLists: (token: string) => json<{ lists: StudygoList[] }>('POST', '/api/studygo/lists', { token }),
+  studygoImport: (token: string, ids: number[]) =>
+    json<{ results: StudygoResult[] }>('POST', '/api/studygo/import', { token, ids }),
   subjects: () => json<Subject[]>('GET', '/api/subjects'),
   createSubject: (name: string) => json<Subject>('POST', '/api/subjects', { name }),
   renameSubject: (id: number, name: string) => json<Subject>('PATCH', `/api/subjects/${id}`, { name }),

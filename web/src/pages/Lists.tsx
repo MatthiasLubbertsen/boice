@@ -1,9 +1,10 @@
-import { ArrowRightIcon, FlagIcon, Loader2Icon, PlusIcon, SparklesIcon } from 'lucide-react'
+import { ArrowRightIcon, DownloadCloudIcon, FlagIcon, Loader2Icon, PlusIcon, SparklesIcon } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { Link, useLocation } from 'wouter'
 
 import { ListFormDialog } from '@/components/ListForm'
+import { StudygoDialog } from '@/components/StudygoDialog'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
 import { api, errorMessage, listKindLabel, type List, type Subject } from '@/lib/api'
@@ -13,12 +14,15 @@ export default function Lists() {
   const [subjects, setSubjects] = useState<Subject[]>([])
   const [filter, setFilter] = useState<'all' | 'none' | number>('all')
   const [creating, setCreating] = useState(false)
+  const [importing, setImporting] = useState(false)
   const [, navigate] = useLocation()
 
-  useEffect(() => {
+  const load = () => {
     api.lists().then(setLists, (e) => toast.error(errorMessage(e)))
     api.subjects().then(setSubjects, () => {})
-  }, [])
+  }
+
+  useEffect(load, [])
 
   const shown = lists?.filter((l) => filter === 'all' || (filter === 'none' ? l.subjectId === null : l.subjectId === filter))
   const subjectName = (id: number | null) => subjects.find((s) => s.id === id)?.name
@@ -27,9 +31,14 @@ export default function Lists() {
     <main className="flex flex-col gap-6 pt-4">
       <div className="flex items-center justify-between gap-4">
         <h1 className="text-2xl font-semibold tracking-tight">Your lists</h1>
-        <Button onClick={() => setCreating(true)}>
-          <PlusIcon /> New list
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => setImporting(true)}>
+            <DownloadCloudIcon /> Studygo
+          </Button>
+          <Button onClick={() => setCreating(true)}>
+            <PlusIcon /> New list
+          </Button>
+        </div>
       </div>
 
       {lists?.length === 0 && (
@@ -104,6 +113,8 @@ export default function Lists() {
           </li>
         ))}
       </ul>
+
+      <StudygoDialog open={importing} onOpenChange={setImporting} onImported={load} />
 
       <ListFormDialog
         open={creating}
