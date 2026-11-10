@@ -41,6 +41,26 @@ CREATE TABLE IF NOT EXISTS words (
 );
 CREATE INDEX IF NOT EXISTS words_list ON words(list_id, pos);
 
+CREATE TABLE IF NOT EXISTS subjects (
+  id         INTEGER PRIMARY KEY,
+  owner      TEXT    NOT NULL,
+  name       TEXT    NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS subjects_owner ON subjects(owner);
+
+CREATE TABLE IF NOT EXISTS scans (
+  id           INTEGER PRIMARY KEY,
+  list_id      INTEGER NOT NULL REFERENCES lists(id) ON DELETE CASCADE,
+  status       TEXT    NOT NULL DEFAULT 'running',
+  page         INTEGER NOT NULL DEFAULT 0,
+  words        TEXT    NOT NULL DEFAULT '[]',
+  dict_checked INTEGER NOT NULL DEFAULT 0,
+  error        TEXT    NOT NULL DEFAULT '',
+  created_at   INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS scans_list ON scans(list_id);
+
 CREATE TABLE IF NOT EXISTS dict_cache (
   lang  TEXT NOT NULL,
   word  TEXT NOT NULL,
@@ -66,11 +86,21 @@ type List struct {
 	LangA      string `json:"langA"`
 	LangB      string `json:"langB"`
 	RecordMode string `json:"recordMode"`
+	Kind       string `json:"kind"` // "lang" (word pairs) or "def" (term + definition)
+	SubjectID  *int64 `json:"subjectId"`
 	CreatedAt  int64  `json:"createdAt"`
 	UpdatedAt  int64  `json:"updatedAt"`
 	WordCount  int    `json:"wordCount"`
 	Recorded   int    `json:"recorded"`
 	Flagged    int    `json:"flagged"`
+	ScansReady int    `json:"scansReady"`
+	ScansBusy  int    `json:"scansBusy"`
+}
+
+type Subject struct {
+	ID        int64  `json:"id"`
+	Name      string `json:"name"`
+	ListCount int    `json:"listCount"`
 }
 
 type Word struct {
@@ -106,7 +136,39 @@ func openStore(path string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := migrate(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	// A scan that was running when the server stopped will never finish.
+	_, _ = db.Exec(`UPDATE scans SET status='error', error='The server restarted while reading this photo. Scan it again.' WHERE status='running'`)
 	return &Store{db}, nil
+}
+
+// migrate adds columns that older databases lack.
+func migrate(db *sql.DB) error {
+	have := map[string]bool{}
+	rows, err := db.Query(`SELECT name FROM pragma_table_info('lists')`)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var n string
+		_ = rows.Scan(&n)
+		have[n] = true
+	}
+	rows.Close()
+	if !have["kind"] {
+		if _, err := db.Exec(`ALTER TABLE lists ADD COLUMN kind TEXT NOT NULL DEFAULT 'lang'`); err != nil {
+			return err
+		}
+	}
+	if !have["subject_id"] {
+		if _, err := db.Exec(`ALTER TABLE lists ADD COLUMN subject_id INTEGER REFERENCES subjects(id) ON DELETE SET NULL`); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Store) Close() error { return s.db.Close() }
@@ -119,14 +181,16 @@ const recordedExpr = `CASE l.record_mode
   WHEN 'b' THEN w.audio_b > 0
   ELSE w.audio_a > 0 AND w.audio_b > 0 END`
 
-const listSelect = `SELECT l.id, l.name, l.lang_a, l.lang_b, l.record_mode, l.created_at, l.updated_at,
-  COUNT(w.id), COALESCE(SUM(` + recordedExpr + `), 0), COALESCE(SUM(w.flagged), 0)
+const listSelect = `SELECT l.id, l.name, l.lang_a, l.lang_b, l.record_mode, l.kind, l.subject_id, l.created_at, l.updated_at,
+  COUNT(w.id), COALESCE(SUM(` + recordedExpr + `), 0), COALESCE(SUM(w.flagged), 0),
+  (SELECT COUNT(*) FROM scans s WHERE s.list_id = l.id AND s.status = 'done'),
+  (SELECT COUNT(*) FROM scans s WHERE s.list_id = l.id AND s.status = 'running')
   FROM lists l LEFT JOIN words w ON w.list_id = l.id `
 
 func scanList(row interface{ Scan(...any) error }) (List, error) {
 	var l List
-	err := row.Scan(&l.ID, &l.Name, &l.LangA, &l.LangB, &l.RecordMode, &l.CreatedAt, &l.UpdatedAt,
-		&l.WordCount, &l.Recorded, &l.Flagged)
+	err := row.Scan(&l.ID, &l.Name, &l.LangA, &l.LangB, &l.RecordMode, &l.Kind, &l.SubjectID, &l.CreatedAt, &l.UpdatedAt,
+		&l.WordCount, &l.Recorded, &l.Flagged, &l.ScansReady, &l.ScansBusy)
 	return l, err
 }
 
@@ -155,19 +219,19 @@ func (s *Store) List(owner string, id int64) (List, error) {
 	return l, err
 }
 
-func (s *Store) CreateList(owner, name, langA, langB, mode string) (int64, error) {
+func (s *Store) CreateList(owner, name, langA, langB, mode, kind string, subjectID *int64) (int64, error) {
 	t := now()
-	res, err := s.db.Exec(`INSERT INTO lists (owner, name, lang_a, lang_b, record_mode, created_at, updated_at)
-		VALUES (?,?,?,?,?,?,?)`, owner, name, langA, langB, mode, t, t)
+	res, err := s.db.Exec(`INSERT INTO lists (owner, name, lang_a, lang_b, record_mode, kind, subject_id, created_at, updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?)`, owner, name, langA, langB, mode, kind, subjectID, t, t)
 	if err != nil {
 		return 0, err
 	}
 	return res.LastInsertId()
 }
 
-func (s *Store) UpdateList(id int64, name, langA, langB, mode string) error {
-	_, err := s.db.Exec(`UPDATE lists SET name=?, lang_a=?, lang_b=?, record_mode=?, updated_at=? WHERE id=?`,
-		name, langA, langB, mode, now(), id)
+func (s *Store) UpdateList(id int64, name, langA, langB, mode, kind string, subjectID *int64) error {
+	_, err := s.db.Exec(`UPDATE lists SET name=?, lang_a=?, lang_b=?, record_mode=?, kind=?, subject_id=?, updated_at=? WHERE id=?`,
+		name, langA, langB, mode, kind, subjectID, now(), id)
 	return err
 }
 
@@ -348,5 +412,140 @@ func (s *Store) Meta(key string) string {
 
 func (s *Store) SetMeta(key, value string) error {
 	_, err := s.db.Exec(`INSERT OR REPLACE INTO meta (key, value) VALUES (?,?)`, key, value)
+	return err
+}
+
+// Subjects.
+
+func (s *Store) Subjects(owner string) ([]Subject, error) {
+	rows, err := s.db.Query(`SELECT s.id, s.name, COUNT(l.id) FROM subjects s
+		LEFT JOIN lists l ON l.subject_id = s.id WHERE s.owner = ? GROUP BY s.id ORDER BY s.name COLLATE NOCASE`, owner)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Subject{}
+	for rows.Next() {
+		var x Subject
+		if err := rows.Scan(&x.ID, &x.Name, &x.ListCount); err != nil {
+			return nil, err
+		}
+		out = append(out, x)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) Subject(owner string, id int64) (Subject, error) {
+	var x Subject
+	err := s.db.QueryRow(`SELECT s.id, s.name, COUNT(l.id) FROM subjects s
+		LEFT JOIN lists l ON l.subject_id = s.id WHERE s.owner = ? AND s.id = ? GROUP BY s.id`, owner, id).
+		Scan(&x.ID, &x.Name, &x.ListCount)
+	if errors.Is(err, sql.ErrNoRows) {
+		return x, errNotFound
+	}
+	return x, err
+}
+
+func (s *Store) CreateSubject(owner, name string) (int64, error) {
+	res, err := s.db.Exec(`INSERT INTO subjects (owner, name, created_at) VALUES (?,?,?)`, owner, name, now())
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+func (s *Store) RenameSubject(id int64, name string) error {
+	_, err := s.db.Exec(`UPDATE subjects SET name=? WHERE id=?`, name, id)
+	return err
+}
+
+// DeleteSubject removes the subject; its lists stay, just unlinked.
+func (s *Store) DeleteSubject(id int64) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`UPDATE lists SET subject_id=NULL WHERE subject_id=?`, id); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM subjects WHERE id=?`, id); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// Scans: photos read in the background.
+
+type Scan struct {
+	ID          int64         `json:"id"`
+	ListID      int64         `json:"listId"`
+	Status      string        `json:"status"` // running | done | error
+	Page        int           `json:"page"`
+	Words       []scannedWord `json:"words"`
+	DictChecked bool          `json:"dictChecked"`
+	Error       string        `json:"error"`
+	CreatedAt   int64         `json:"createdAt"`
+}
+
+func (s *Store) CreateScan(listID int64) (int64, error) {
+	res, err := s.db.Exec(`INSERT INTO scans (list_id, created_at) VALUES (?,?)`, listID, now())
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+func (s *Store) FinishScan(id int64, page int, words []scannedWord, dictChecked bool, errMsg string) {
+	status := "done"
+	if errMsg != "" {
+		status = "error"
+	}
+	b, _ := json.Marshal(words)
+	_, _ = s.db.Exec(`UPDATE scans SET status=?, page=?, words=?, dict_checked=?, error=? WHERE id=?`,
+		status, page, string(b), dictChecked, errMsg, id)
+}
+
+func scanScan(row interface{ Scan(...any) error }) (Scan, error) {
+	var sc Scan
+	var words string
+	if err := row.Scan(&sc.ID, &sc.ListID, &sc.Status, &sc.Page, &words, &sc.DictChecked, &sc.Error, &sc.CreatedAt); err != nil {
+		return sc, err
+	}
+	if json.Unmarshal([]byte(words), &sc.Words) != nil || sc.Words == nil {
+		sc.Words = []scannedWord{}
+	}
+	return sc, nil
+}
+
+const scanSelect = `SELECT sc.id, sc.list_id, sc.status, sc.page, sc.words, sc.dict_checked, sc.error, sc.created_at FROM scans sc `
+
+func (s *Store) Scans(listID int64) ([]Scan, error) {
+	rows, err := s.db.Query(scanSelect+`WHERE sc.list_id = ? ORDER BY sc.id`, listID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Scan{}
+	for rows.Next() {
+		sc, err := scanScan(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, sc)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) Scan(owner string, id int64) (Scan, error) {
+	sc, err := scanScan(s.db.QueryRow(scanSelect+`JOIN lists l ON l.id = sc.list_id WHERE sc.id = ? AND l.owner = ?`, id, owner))
+	if errors.Is(err, sql.ErrNoRows) {
+		return sc, errNotFound
+	}
+	return sc, err
+}
+
+func (s *Store) DeleteScan(id int64) error {
+	_, err := s.db.Exec(`DELETE FROM scans WHERE id=?`, id)
 	return err
 }

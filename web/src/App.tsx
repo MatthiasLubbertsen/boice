@@ -1,4 +1,4 @@
-import { LogOutIcon, UserIcon } from 'lucide-react'
+import { LogOutIcon, TagsIcon, UserIcon } from 'lucide-react'
 import { createContext, lazy, Suspense, useContext, useEffect, useState } from 'react'
 import { Link, Route, Switch } from 'wouter'
 
@@ -16,6 +16,7 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import { api, ApiError, type Me } from '@/lib/api'
 import ListDetail from '@/pages/ListDetail'
 import Lists from '@/pages/Lists'
+import Subjects from '@/pages/Subjects'
 
 // The recorder pulls in the MP3 encoder, so load it only when needed.
 const Record = lazy(() => import('@/pages/Record'))
@@ -97,6 +98,11 @@ export default function App() {
               </Shell>
             )}
           </Route>
+          <Route path="/subjects">
+            <Shell>
+              <Subjects />
+            </Shell>
+          </Route>
           <Route>
             <Shell>
               <Lists />
@@ -118,6 +124,12 @@ function Shell({ children }: { children: React.ReactNode }) {
         <Link href="/" aria-label="Boice home">
           <Logo />
         </Link>
+        <div className="flex items-center gap-1">
+        <Button variant="ghost" asChild>
+          <Link href="/subjects">
+            <TagsIcon /> Subjects
+          </Link>
+        </Button>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="ghost" size="icon" aria-label="Account">
@@ -138,6 +150,7 @@ function Shell({ children }: { children: React.ReactNode }) {
             )}
           </DropdownMenuContent>
         </DropdownMenu>
+        </div>
       </header>
       {children}
     </div>

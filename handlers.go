@@ -41,7 +41,13 @@ func (a *App) routes() http.Handler {
 	api.HandleFunc("GET /api/lists/{id}", a.handleList)
 	api.HandleFunc("PATCH /api/lists/{id}", a.handleUpdateList)
 	api.HandleFunc("DELETE /api/lists/{id}", a.handleDeleteList)
-	api.HandleFunc("POST /api/lists/{id}/scan", a.handleScan)
+	api.HandleFunc("GET /api/subjects", a.handleSubjects)
+	api.HandleFunc("POST /api/subjects", a.handleCreateSubject)
+	api.HandleFunc("PATCH /api/subjects/{id}", a.handleRenameSubject)
+	api.HandleFunc("DELETE /api/subjects/{id}", a.handleDeleteSubject)
+	api.HandleFunc("GET /api/lists/{id}/scans", a.handleScans)
+	api.HandleFunc("POST /api/lists/{id}/scans", a.handleStartScan)
+	api.HandleFunc("DELETE /api/scans/{id}", a.handleDeleteScan)
 	api.HandleFunc("POST /api/lists/{id}/check", a.handleCheck)
 	api.HandleFunc("POST /api/lists/{id}/words", a.handleAddWords)
 	api.HandleFunc("POST /api/lists/{id}/words/delete", a.handleDeleteWords)
@@ -181,6 +187,8 @@ type listInput struct {
 	LangA      string `json:"langA"`
 	LangB      string `json:"langB"`
 	RecordMode string `json:"recordMode"`
+	Kind       string `json:"kind"`
+	SubjectID  *int64 `json:"subjectId"`
 }
 
 func (in *listInput) validate() string {
@@ -192,12 +200,26 @@ func (in *listInput) validate() string {
 		return "unknown language"
 	case !validMode(in.RecordMode):
 		return "unknown record mode"
+	case in.Kind != "lang" && in.Kind != "def":
+		return "unknown list type"
 	}
 	return ""
 }
 
+// checkSubject makes sure a linked subject belongs to the caller.
+func (a *App) checkSubject(w http.ResponseWriter, r *http.Request, id *int64) bool {
+	if id == nil {
+		return true
+	}
+	if _, err := a.store.Subject(userFrom(r).ID, *id); err != nil {
+		writeErr(w, http.StatusBadRequest, "unknown subject")
+		return false
+	}
+	return true
+}
+
 func (a *App) handleCreateList(w http.ResponseWriter, r *http.Request) {
-	in := listInput{LangA: "de", LangB: "nl", RecordMode: "a"}
+	in := listInput{LangA: "de", LangB: "nl", RecordMode: "a", Kind: "lang"}
 	if !readJSON(w, r, &in) {
 		return
 	}
@@ -205,7 +227,10 @@ func (a *App) handleCreateList(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, msg)
 		return
 	}
-	id, err := a.store.CreateList(userFrom(r).ID, in.Name, in.LangA, in.LangB, in.RecordMode)
+	if !a.checkSubject(w, r, in.SubjectID) {
+		return
+	}
+	id, err := a.store.CreateList(userFrom(r).ID, in.Name, in.LangA, in.LangB, in.RecordMode, in.Kind, in.SubjectID)
 	if err != nil {
 		a.fail(w, err)
 		return
@@ -236,7 +261,7 @@ func (a *App) handleUpdateList(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	in := listInput{Name: l.Name, LangA: l.LangA, LangB: l.LangB, RecordMode: l.RecordMode}
+	in := listInput{Name: l.Name, LangA: l.LangA, LangB: l.LangB, RecordMode: l.RecordMode, Kind: l.Kind, SubjectID: l.SubjectID}
 	if !readJSON(w, r, &in) {
 		return
 	}
@@ -244,7 +269,10 @@ func (a *App) handleUpdateList(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, msg)
 		return
 	}
-	if err := a.store.UpdateList(l.ID, in.Name, in.LangA, in.LangB, in.RecordMode); err != nil {
+	if !a.checkSubject(w, r, in.SubjectID) {
+		return
+	}
+	if err := a.store.UpdateList(l.ID, in.Name, in.LangA, in.LangB, in.RecordMode, in.Kind, in.SubjectID); err != nil {
 		a.fail(w, err)
 		return
 	}
@@ -281,6 +309,10 @@ func (a *App) checkPairs(ctx context.Context, l List, pairs []Pair) (issues [][]
 		if p.Unsure {
 			issues[i] = append(issues[i], Issue{})
 		}
+	}
+	if l.Kind == "def" {
+		// Definitions are sentences: a dictionary check would only cry wolf.
+		return issues, true
 	}
 	unkA, okA := a.dict.Unknown(ctx, l.LangA, as)
 	unkB, okB := a.dict.Unknown(ctx, l.LangB, bs)
@@ -325,7 +357,9 @@ type scannedWord struct {
 	Issues      []Issue `json:"issues"`
 }
 
-func (a *App) handleScan(w http.ResponseWriter, r *http.Request) {
+// handleStartScan accepts a photo and reads it in the background, so the
+// person can leave the page. The result is kept until they review it.
+func (a *App) handleStartScan(w http.ResponseWriter, r *http.Request) {
 	l, ok := a.ownedList(w, r)
 	if !ok {
 		return
@@ -344,18 +378,35 @@ func (a *App) handleScan(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "Upload a JPEG, PNG or WebP photo.")
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 150*time.Second)
-	defer cancel()
+	id, err := a.store.CreateScan(l.ID)
+	if err != nil {
+		a.fail(w, err)
+		return
+	}
+	go a.runScan(id, l, img, mimeType)
+	writeJSON(w, http.StatusAccepted, Scan{ID: id, ListID: l.ID, Status: "running", Words: []scannedWord{}})
+}
 
-	pairs, page, err := a.ai.Extract(ctx, img, mimeType, l.LangA, l.LangB)
+// runScan reads one photo and stores the outcome. It outlives the request.
+func (a *App) runScan(id int64, l List, img []byte, mimeType string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Second)
+	defer cancel()
+	defer func() {
+		if p := recover(); p != nil {
+			log.Printf("scan panic: %v", p)
+			a.store.FinishScan(id, 0, nil, false, "Could not read the photo. Try again.")
+		}
+	}()
+
+	pairs, page, err := a.ai.Extract(ctx, img, mimeType, l.LangA, l.LangB, l.Kind)
 	if err != nil {
 		log.Printf("scan: %v", err)
+		msg := "Could not read the photo. Try again, or take a sharper picture."
 		var ae *aiError
 		if errors.As(err, &ae) {
-			writeErr(w, http.StatusBadGateway, ae.userMessage())
-		} else {
-			writeErr(w, http.StatusBadGateway, "Could not read the photo. Try again, or take a sharper picture.")
+			msg = ae.userMessage()
 		}
+		a.store.FinishScan(id, 0, nil, false, msg)
 		return
 	}
 	if len(pairs) > 400 {
@@ -369,7 +420,108 @@ func (a *App) handleScan(w http.ResponseWriter, r *http.Request) {
 			out[i].Issues = []Issue{}
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"page": page, "words": out, "dictChecked": dictOK})
+	a.store.FinishScan(id, page, out, dictOK, "")
+}
+
+func (a *App) handleScans(w http.ResponseWriter, r *http.Request) {
+	l, ok := a.ownedList(w, r)
+	if !ok {
+		return
+	}
+	scans, err := a.store.Scans(l.ID)
+	if err != nil {
+		a.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, scans)
+}
+
+func (a *App) handleDeleteScan(w http.ResponseWriter, r *http.Request) {
+	sc, err := a.store.Scan(userFrom(r).ID, pathID(r))
+	if err != nil {
+		a.fail(w, err)
+		return
+	}
+	if err := a.store.DeleteScan(sc.ID); err != nil {
+		a.fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// ---- subjects ----
+
+func (a *App) handleSubjects(w http.ResponseWriter, r *http.Request) {
+	subs, err := a.store.Subjects(userFrom(r).ID)
+	if err != nil {
+		a.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, subs)
+}
+
+func subjectName(w http.ResponseWriter, r *http.Request) (string, bool) {
+	var in struct {
+		Name string `json:"name"`
+	}
+	if !readJSON(w, r, &in) {
+		return "", false
+	}
+	name := limitRunes(strings.TrimSpace(in.Name), 80)
+	if name == "" {
+		writeErr(w, http.StatusBadRequest, "give the subject a name")
+		return "", false
+	}
+	return name, true
+}
+
+func (a *App) handleCreateSubject(w http.ResponseWriter, r *http.Request) {
+	name, ok := subjectName(w, r)
+	if !ok {
+		return
+	}
+	id, err := a.store.CreateSubject(userFrom(r).ID, name)
+	if err != nil {
+		a.fail(w, err)
+		return
+	}
+	sub, err := a.store.Subject(userFrom(r).ID, id)
+	if err != nil {
+		a.fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, sub)
+}
+
+func (a *App) handleRenameSubject(w http.ResponseWriter, r *http.Request) {
+	sub, err := a.store.Subject(userFrom(r).ID, pathID(r))
+	if err != nil {
+		a.fail(w, err)
+		return
+	}
+	name, ok := subjectName(w, r)
+	if !ok {
+		return
+	}
+	if err := a.store.RenameSubject(sub.ID, name); err != nil {
+		a.fail(w, err)
+		return
+	}
+	sub.Name = name
+	writeJSON(w, http.StatusOK, sub)
+}
+
+func (a *App) handleDeleteSubject(w http.ResponseWriter, r *http.Request) {
+	sub, err := a.store.Subject(userFrom(r).ID, pathID(r))
+	if err != nil {
+		a.fail(w, err)
+		return
+	}
+	if err := a.store.DeleteSubject(sub.ID); err != nil {
+		a.fail(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleCheck re-runs the dictionary check over the whole list.
@@ -677,7 +829,7 @@ func (a *App) handleExport(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	in := exportInput{GapMs: 1500, PairGapMs: 1000, Repeat: 1, Direction: "ab", IncludeAudio: true}
+	in := exportInput{GapMs: 500, PairGapMs: 500, Repeat: 1, Direction: "ab", IncludeAudio: true}
 	if !readJSON(w, r, &in) {
 		return
 	}
@@ -716,7 +868,11 @@ func (a *App) handleExport(w http.ResponseWriter, r *http.Request) {
 			}
 			_ = cw.Write([]string{x, y, page, note})
 		}
-		row(langName(l.LangA), langName(l.LangB), "Page", "Note")
+		headA, headB := langName(l.LangA), langName(l.LangB)
+		if l.Kind == "def" {
+			headA, headB = "Term", "Definition"
+		}
+		row(headA, headB, "Page", "Note")
 		for _, wd := range words {
 			page := ""
 			if wd.Page > 0 {

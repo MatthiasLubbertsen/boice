@@ -114,9 +114,44 @@ type Pair struct {
 	Unsure bool   `json:"unsure"`
 }
 
-// Extract reads the word pairs out of a photo of a vocabulary table.
-func (a *AI) Extract(ctx context.Context, img []byte, mime, langA, langB string) (pairs []Pair, page int, err error) {
-	prompt := fmt.Sprintf(`This is a photo of a vocabulary list or table from a schoolbook.
+// firstForm keeps only the first of several forms written as "form | form".
+// Books print "der Schüler | die Schülerinnen" (singular | plural); only the
+// first one is wanted.
+func firstForm(s string) string {
+	if i := strings.IndexAny(s, "|¦│"); i >= 0 {
+		s = s[:i]
+	}
+	return cleanText(s)
+}
+
+const defPrompt = `This is a photo of a glossary from a schoolbook: terms, each followed by its definition.
+The photo may be rotated or taken at an angle; read it anyway. Terms are usually bold or coloured and
+directly followed by their definition, which may wrap over several lines. Ignore running page text
+that is not a term with a definition (section headings such as "§4.2 Een verdeelde wereld", page
+headers, exercises, tips).
+
+Extract every term with its definition, in reading order, and reply with only this JSON:
+{"page": <printed page number or null>, "pairs": [{"a": "<term>", "b": "<definition>", "unsure": false}]}
+
+Rules:
+- Transcribe exactly what is printed, in the original language. Keep capital letters and punctuation.
+- "a" is only the term, "b" is the whole definition joined into one string. Fix hyphenation from line breaks.
+- Never invent or complete a definition. Skip terms without a definition.
+- Set "unsure": true when text is blurry, cut off or you had to guess.
+- If there are no terms, return {"page": null, "pairs": []}.`
+
+// Extract reads the entries out of a photo: word pairs of a vocabulary table,
+// or terms with definitions when kind is "def".
+func (a *AI) Extract(ctx context.Context, img []byte, mime, langA, langB, kind string) (pairs []Pair, page int, err error) {
+	prompt := defPrompt
+	if kind != "def" {
+		prompt = vocabPrompt(langA, langB)
+	}
+	return a.extract(ctx, img, mime, prompt, kind)
+}
+
+func vocabPrompt(langA, langB string) string {
+	return fmt.Sprintf(`This is a photo of a vocabulary list or table from a schoolbook.
 Column/language A is %[1]s, column/language B is %[2]s.
 
 Extract every vocabulary pair, top to bottom, and reply with only this JSON:
@@ -124,13 +159,16 @@ Extract every vocabulary pair, top to bottom, and reply with only this JSON:
 
 Rules:
 - Transcribe exactly what is printed. Keep articles, plural notes, brackets, capital letters, umlauts and ß.
+- Some cells list several forms separated by "|" (for example "der Schüler | die Schülerinnen"). Write only the first form.
 - Never translate or fill in a missing side yourself. Skip rows where one side is missing.
 - If the columns are in the other order on the page, still put %[1]s in "a" and %[2]s in "b".
 - Join a cell that wraps over several lines into one string. Fix hyphenation from line breaks.
 - Ignore headings, exercise numbers, example sentences outside the table and handwriting.
 - Set "unsure": true when a cell is blurry, cut off or you had to guess.
 - If there are no vocabulary pairs, return {"page": null, "pairs": []}.`, langName(langA), langName(langB))
+}
 
+func (a *AI) extract(ctx context.Context, img []byte, mime, prompt, kind string) (pairs []Pair, page int, err error) {
 	reply, err := a.chat(ctx, []map[string]any{{
 		"role": "user",
 		"content": []map[string]any{
@@ -152,6 +190,9 @@ Rules:
 	}
 	for _, p := range out.Pairs {
 		p.A, p.B = cleanText(p.A), cleanText(p.B)
+		if kind != "def" {
+			p.A, p.B = firstForm(p.A), firstForm(p.B)
+		}
 		if p.A != "" && p.B != "" {
 			pairs = append(pairs, p)
 		}

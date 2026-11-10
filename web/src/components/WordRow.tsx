@@ -11,7 +11,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { api, langName, type List, type Side, type Word } from '@/lib/api'
+import { api, sideCode, sideName, type List, type Side, type Word } from '@/lib/api'
 import { player } from '@/lib/player'
 import { hasAudio, sidesFor } from '@/lib/words'
 import { cn } from '@/lib/utils'
@@ -85,7 +85,7 @@ export const WordRow = memo(function WordRow({
         <div className="grid min-w-0 flex-1 sm:grid-cols-2 sm:gap-1">
           <EditableText
             value={word.term}
-            aria-label={langName(list.langA)}
+            aria-label={sideName(list, 'a')}
             aria-invalid={issueOn('a')}
             lang={list.langA}
             className="font-medium"
@@ -93,7 +93,7 @@ export const WordRow = memo(function WordRow({
           />
           <EditableText
             value={word.translation}
-            aria-label={langName(list.langB)}
+            aria-label={sideName(list, 'b')}
             aria-invalid={issueOn('b')}
             lang={list.langB}
             className="text-muted-foreground focus:text-foreground"
@@ -115,24 +115,24 @@ export const WordRow = memo(function WordRow({
                 key={side}
                 size="xs"
                 variant="outline"
-                className="w-11 text-primary uppercase"
-                aria-label={`Play ${langName(side === 'a' ? list.langA : list.langB)} recording`}
+                className="w-14 text-primary uppercase"
+                aria-label={`Play ${sideName(list, side)} recording`}
                 onClick={() => void player.play(api.audioUrl(word, side))}
               >
                 <PlayIcon className="fill-current" />
-                {side === 'a' ? list.langA : list.langB}
+                {sideCode(list, side)}
               </Button>
             ) : (
               <Button
                 key={side}
                 size="xs"
                 variant="ghost"
-                className="w-11 border-dashed border-input text-muted-foreground uppercase"
-                aria-label={`Record ${langName(side === 'a' ? list.langA : list.langB)}`}
+                className="w-14 border-dashed border-input text-muted-foreground uppercase"
+                aria-label={`Record ${sideName(list, side)}`}
                 onClick={() => actions.record(word.id)}
               >
                 <MicIcon />
-                {side === 'a' ? list.langA : list.langB}
+                {sideCode(list, side)}
               </Button>
             ),
           )}

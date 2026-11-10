@@ -9,10 +9,19 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Slider } from '@/components/ui/slider'
 import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { api, errorMessage, langName, type List, type Side, type Word } from '@/lib/api'
-import { formatDuration, hasAudio } from '@/lib/words'
+import { api, errorMessage, sideName, type List, type Side, type Word } from '@/lib/api'
+import { formatDuration, hasAudio, plural } from '@/lib/words'
 
 type Content = 'a' | 'b' | 'ab' | 'ba'
+
+function shuffled<T>(items: T[]): T[] {
+  const out = [...items]
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[out[i], out[j]] = [out[j], out[i]]
+  }
+  return out
+}
 
 export function ExportDialog({
   list,
@@ -28,13 +37,14 @@ export function ExportDialog({
   open: boolean
   onOpenChange: (open: boolean) => void
 }) {
-  const nameA = langName(list.langA)
-  const nameB = langName(list.langB)
+  const nameA = sideName(list, 'a')
+  const nameB = sideName(list, 'b')
   const [content, setContent] = useState<Content>(
     list.recordMode === 'both' ? (reversed ? 'ba' : 'ab') : list.recordMode,
   )
-  const [gap, setGap] = useState(2)
-  const [pairGap, setPairGap] = useState(1)
+  const [gap, setGap] = useState(0.5)
+  const [pairGap, setPairGap] = useState(0.5)
+  const [shuffle, setShuffle] = useState(false)
   const [repeat, setRepeat] = useState(1)
   const [direction, setDirection] = useState<'ab' | 'ba' | 'both'>(reversed ? 'ba' : 'ab')
   const [includeAudio, setIncludeAudio] = useState(true)
@@ -54,7 +64,8 @@ export function ExportDialog({
     setBusy(format)
     try {
       await api.exportFile(list.id, format, {
-        wordIds: words.map((w) => w.id),
+        // Shuffling is only for the MP3: cards and spreadsheets keep the list order.
+        wordIds: (format === 'mp3' && shuffle ? shuffled(words) : words).map((w) => w.id),
         sides,
         gapMs: gap * 1000,
         pairGapMs: pairGap * 1000,
@@ -82,7 +93,7 @@ export function ExportDialog({
         <DialogHeader>
           <DialogTitle>Export</DialogTitle>
           <DialogDescription>
-            {words.length} {words.length === 1 ? 'word' : 'words'}, in the order shown in the list.
+            {plural(words.length, 'word')}, in the order shown in the list (the MP3 can be shuffled).
           </DialogDescription>
         </DialogHeader>
         <Tabs defaultValue="mp3" className="gap-5">
@@ -124,6 +135,10 @@ export function ExportDialog({
               <Slider value={[pairGap]} min={0.5} max={6} step={0.5} onValueChange={([v]) => setPairGap(v)} />
             </div>
             <div className="flex items-center justify-between gap-3">
+              <Label htmlFor="export-shuffle">Shuffle the order</Label>
+              <Switch id="export-shuffle" checked={shuffle} onCheckedChange={setShuffle} />
+            </div>
+            <div className="flex items-center justify-between gap-3">
               <Label htmlFor="export-repeat">Say each word</Label>
               <Select value={String(repeat)} onValueChange={(v) => setRepeat(Number(v))}>
                 <SelectTrigger id="export-repeat" className="w-28">
@@ -139,7 +154,7 @@ export function ExportDialog({
             <p className="text-sm text-muted-foreground">
               {withAudio.length === 0
                 ? 'None of these words has a recording in this language yet.'
-                : `${withAudio.length} of ${words.length} words have recordings · about ${formatDuration(totalMs)}`}
+                : `${withAudio.length} of ${plural(words.length, 'word')} ${withAudio.length === 1 ? 'has a recording' : 'have recordings'} · about ${formatDuration(totalMs)}`}
             </p>
             <DownloadButton format="mp3" label="Download MP3" disabled={withAudio.length === 0} />
           </TabsContent>

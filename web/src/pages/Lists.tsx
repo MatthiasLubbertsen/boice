@@ -1,4 +1,4 @@
-import { ArrowRightIcon, FlagIcon, PlusIcon } from 'lucide-react'
+import { ArrowRightIcon, FlagIcon, Loader2Icon, PlusIcon, SparklesIcon } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { Link, useLocation } from 'wouter'
@@ -6,16 +6,22 @@ import { Link, useLocation } from 'wouter'
 import { ListFormDialog } from '@/components/ListForm'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
-import { api, errorMessage, langName, type List } from '@/lib/api'
+import { api, errorMessage, listKindLabel, type List, type Subject } from '@/lib/api'
 
 export default function Lists() {
   const [lists, setLists] = useState<List[] | null>(null)
+  const [subjects, setSubjects] = useState<Subject[]>([])
+  const [filter, setFilter] = useState<'all' | 'none' | number>('all')
   const [creating, setCreating] = useState(false)
   const [, navigate] = useLocation()
 
   useEffect(() => {
     api.lists().then(setLists, (e) => toast.error(errorMessage(e)))
+    api.subjects().then(setSubjects, () => {})
   }, [])
+
+  const shown = lists?.filter((l) => filter === 'all' || (filter === 'none' ? l.subjectId === null : l.subjectId === filter))
+  const subjectName = (id: number | null) => subjects.find((s) => s.id === id)?.name
 
   return (
     <main className="flex flex-col gap-6 pt-4">
@@ -38,8 +44,25 @@ export default function Lists() {
         </div>
       )}
 
+      {subjects.length > 0 && (lists?.length ?? 0) > 0 && (
+        <div className="flex flex-wrap gap-2" role="group" aria-label="Filter by subject">
+          {([['all', 'All'], ...subjects.map((s) => [s.id, s.name] as const), ['none', 'No subject']] as const).map(([key, label]) => (
+            <Button
+              key={key}
+              size="sm"
+              variant="outline"
+              aria-pressed={filter === key}
+              onClick={() => setFilter(key)}
+              className="aria-pressed:border-primary/60 aria-pressed:text-primary"
+            >
+              {label}
+            </Button>
+          ))}
+        </div>
+      )}
+
       <ul className="grid gap-3 sm:grid-cols-2">
-        {lists?.map((l) => (
+        {shown?.map((l) => (
           <li key={l.id}>
             <Link
               href={`/l/${l.id}`}
@@ -49,7 +72,8 @@ export default function Lists() {
                 <div className="min-w-0">
                   <h2 className="truncate font-medium">{l.name}</h2>
                   <p className="text-sm text-muted-foreground">
-                    {langName(l.langA)} → {langName(l.langB)}
+                    {subjectName(l.subjectId) && `${subjectName(l.subjectId)} · `}
+                    {listKindLabel(l)}
                   </p>
                 </div>
                 <ArrowRightIcon className="mt-1 size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-primary" />
@@ -60,6 +84,15 @@ export default function Lists() {
                   <span className="tabular-nums">
                     {l.wordCount === 0 ? 'No words yet' : `${l.recorded} of ${l.wordCount} recorded`}
                   </span>
+                  {l.scansBusy > 0 ? (
+                    <span className="flex items-center gap-1">
+                      <Loader2Icon className="size-3.5 animate-spin text-primary" /> reading photo
+                    </span>
+                  ) : l.scansReady > 0 ? (
+                    <span className="flex items-center gap-1 text-primary">
+                      <SparklesIcon className="size-3.5" /> {l.scansReady} to review
+                    </span>
+                  ) : null}
                   {l.flagged > 0 && (
                     <span className="flex items-center gap-1 tabular-nums">
                       <FlagIcon className="size-3.5 text-primary" /> {l.flagged}
@@ -77,7 +110,7 @@ export default function Lists() {
         onOpenChange={setCreating}
         title="New list"
         submitLabel="Create list"
-        initial={{ name: '', langA: 'de', langB: 'nl', recordMode: 'a' }}
+        initial={{ name: '', langA: 'de', langB: 'nl', recordMode: 'a', kind: 'lang', subjectId: typeof filter === 'number' ? filter : null }}
         onSubmit={async (fields) => {
           const list = await api.createList(fields)
           navigate(`/l/${list.id}`)

@@ -1,5 +1,7 @@
 export type Side = 'a' | 'b'
 export type RecordMode = 'a' | 'b' | 'both'
+/** "lang" = word pairs in two languages, "def" = a term and its definition. */
+export type ListKind = 'lang' | 'def'
 
 export interface Issue {
   side: Side | ''
@@ -13,12 +15,36 @@ export interface List {
   langA: string
   langB: string
   recordMode: RecordMode
+  kind: ListKind
+  subjectId: number | null
   createdAt: number
   updatedAt: number
   wordCount: number
   recorded: number
   flagged: number
+  /** Photos that were read in the background and wait for review. */
+  scansReady: number
+  scansBusy: number
 }
+
+export interface Subject {
+  id: number
+  name: string
+  listCount: number
+}
+
+export interface Scan {
+  id: number
+  listId: number
+  status: 'running' | 'done' | 'error'
+  page: number
+  words: ScannedWord[]
+  dictChecked: boolean
+  error: string
+  createdAt: number
+}
+
+export type ListFields = Pick<List, 'name' | 'langA' | 'langB' | 'recordMode' | 'kind' | 'subjectId'>
 
 export interface Word {
   id: number
@@ -108,13 +134,19 @@ export interface ExportOptions {
 export const api = {
   me: () => json<Me>('GET', '/api/me'),
   lists: () => json<List[]>('GET', '/api/lists'),
-  createList: (input: Pick<List, 'name' | 'langA' | 'langB' | 'recordMode'>) => json<List>('POST', '/api/lists', input),
+  createList: (input: ListFields) => json<List>('POST', '/api/lists', input),
   list: (id: number) => json<{ list: List; words: Word[] }>('GET', `/api/lists/${id}`),
-  updateList: (id: number, patch: Partial<Pick<List, 'name' | 'langA' | 'langB' | 'recordMode'>>) =>
+  updateList: (id: number, patch: Partial<ListFields>) =>
     json<List>('PATCH', `/api/lists/${id}`, patch),
   deleteList: (id: number) => json<void>('DELETE', `/api/lists/${id}`),
-  scan: (id: number, image: Blob) =>
-    json<{ page: number; words: ScannedWord[]; dictChecked: boolean }>('POST', `/api/lists/${id}/scan`, image),
+  /** Starts reading a photo in the background and returns at once. */
+  startScan: (id: number, image: Blob) => json<Scan>('POST', `/api/lists/${id}/scans`, image),
+  scans: (id: number) => json<Scan[]>('GET', `/api/lists/${id}/scans`),
+  deleteScan: (id: number) => json<void>('DELETE', `/api/scans/${id}`),
+  subjects: () => json<Subject[]>('GET', '/api/subjects'),
+  createSubject: (name: string) => json<Subject>('POST', '/api/subjects', { name }),
+  renameSubject: (id: number, name: string) => json<Subject>('PATCH', `/api/subjects/${id}`, { name }),
+  deleteSubject: (id: number) => json<void>('DELETE', `/api/subjects/${id}`),
   check: (id: number) => json<{ words: Word[] }>('POST', `/api/lists/${id}/check`),
   addWords: (id: number, words: Partial<Word>[]) => json<{ words: Word[] }>('POST', `/api/lists/${id}/words`, { words }),
   deleteWords: (id: number, ids: number[]) => json<void>('POST', `/api/lists/${id}/words/delete`, { ids }),
@@ -156,5 +188,17 @@ export const LANGUAGES: Record<string, string> = {
 }
 
 export const langName = (code: string) => LANGUAGES[code] ?? code
+
+/** What a side is called: the language, or Term / Definition for definition lists. */
+export const sideName = (list: Pick<List, 'kind' | 'langA' | 'langB'>, side: Side) =>
+  list.kind === 'def' ? (side === 'a' ? 'Term' : 'Definition') : langName(side === 'a' ? list.langA : list.langB)
+
+/** Short badge text for a side: "de", "nl" or "term", "def". */
+export const sideCode = (list: Pick<List, 'kind' | 'langA' | 'langB'>, side: Side) =>
+  list.kind === 'def' ? (side === 'a' ? 'term' : 'def') : side === 'a' ? list.langA : list.langB
+
+/** "German → Dutch" or "Terms & definitions". */
+export const listKindLabel = (list: Pick<List, 'kind' | 'langA' | 'langB'>) =>
+  list.kind === 'def' ? 'Terms & definitions' : `${langName(list.langA)} → ${langName(list.langB)}`
 
 export const errorMessage = (e: unknown) => (e instanceof Error ? e.message : 'Something went wrong.')

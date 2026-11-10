@@ -1,14 +1,16 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { errorMessage, LANGUAGES, langName, type List, type RecordMode } from '@/lib/api'
+import { api, errorMessage, LANGUAGES, langName, type ListFields, type ListKind, type RecordMode, type Subject } from '@/lib/api'
 import { toast } from 'sonner'
 
-export type ListFields = Pick<List, 'name' | 'langA' | 'langB' | 'recordMode'>
+export type { ListFields }
+
+const NO_SUBJECT = 'none'
 
 function LangSelect({ id, value, onChange }: { id: string; value: string; onChange: (v: string) => void }) {
   return (
@@ -32,6 +34,7 @@ export function RecordModeSelect({
   value,
   langA,
   langB,
+  kind = 'lang',
   onChange,
   className,
 }: {
@@ -39,6 +42,7 @@ export function RecordModeSelect({
   value: RecordMode
   langA: string
   langB: string
+  kind?: ListKind
   onChange: (v: RecordMode) => void
   className?: string
 }) {
@@ -48,9 +52,9 @@ export function RecordModeSelect({
         <SelectValue />
       </SelectTrigger>
       <SelectContent>
-        <SelectItem value="a">{langName(langA)} only</SelectItem>
-        <SelectItem value="b">{langName(langB)} only</SelectItem>
-        <SelectItem value="both">Both languages</SelectItem>
+        <SelectItem value="a">{kind === 'def' ? 'Terms only' : `${langName(langA)} only`}</SelectItem>
+        <SelectItem value="b">{kind === 'def' ? 'Definitions only' : `${langName(langB)} only`}</SelectItem>
+        <SelectItem value="both">{kind === 'def' ? 'Terms and definitions' : 'Both languages'}</SelectItem>
       </SelectContent>
     </Select>
   )
@@ -74,7 +78,12 @@ export function ListFormDialog({
 }) {
   const [fields, setFields] = useState(initial)
   const [busy, setBusy] = useState(false)
+  const [subjects, setSubjects] = useState<Subject[]>([])
   const set = (patch: Partial<ListFields>) => setFields((f) => ({ ...f, ...patch }))
+
+  useEffect(() => {
+    if (open) api.subjects().then(setSubjects, () => {})
+  }, [open])
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -115,15 +124,58 @@ export function ListFormDialog({
               autoFocus
             />
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="grid gap-2">
-              <Label htmlFor="list-lang-a">Learning</Label>
-              <LangSelect id="list-lang-a" value={fields.langA} onChange={(langA) => set({ langA })} />
+          <div className="grid gap-2">
+            <Label htmlFor="list-kind">What’s in it</Label>
+            <Select value={fields.kind} onValueChange={(kind) => set({ kind: kind as ListKind, ...(kind === 'def' ? { langA: 'nl', langB: 'nl' } : {}) })}>
+              <SelectTrigger id="list-kind" className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="lang">Words and translations</SelectItem>
+                <SelectItem value="def">Terms and definitions</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          {fields.kind === 'lang' && (
+            <div className="grid grid-cols-2 gap-3">
+              <div className="grid gap-2">
+                <Label htmlFor="list-lang-a">Learning</Label>
+                <LangSelect id="list-lang-a" value={fields.langA} onChange={(langA) => set({ langA })} />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="list-lang-b">Translation</Label>
+                <LangSelect id="list-lang-b" value={fields.langB} onChange={(langB) => set({ langB })} />
+              </div>
             </div>
+          )}
+          {fields.kind === 'def' && (
             <div className="grid gap-2">
-              <Label htmlFor="list-lang-b">Translation</Label>
-              <LangSelect id="list-lang-b" value={fields.langB} onChange={(langB) => set({ langB })} />
+              <Label htmlFor="list-lang-a">Language of the book</Label>
+              <LangSelect
+                id="list-lang-a"
+                value={fields.langA}
+                onChange={(langA) => set({ langA, langB: langA })}
+              />
             </div>
+          )}
+          <div className="grid gap-2">
+            <Label htmlFor="list-subject">Subject</Label>
+            <Select
+              value={fields.subjectId === null ? NO_SUBJECT : String(fields.subjectId)}
+              onValueChange={(v) => set({ subjectId: v === NO_SUBJECT ? null : Number(v) })}
+            >
+              <SelectTrigger id="list-subject" className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={NO_SUBJECT}>No subject</SelectItem>
+                {subjects.map((s) => (
+                  <SelectItem key={s.id} value={String(s.id)}>
+                    {s.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
           <div className="grid gap-2">
             <Label htmlFor="list-mode">What you record</Label>
@@ -133,6 +185,7 @@ export function ListFormDialog({
               value={fields.recordMode}
               langA={fields.langA}
               langB={fields.langB}
+              kind={fields.kind}
               onChange={(recordMode) => set({ recordMode })}
             />
           </div>

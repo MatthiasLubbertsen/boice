@@ -92,6 +92,9 @@ func writeAnki(w io.Writer, tmpDir string, list List, words []Word, o ankiOpts, 
 	modelID := 1_700_000_000_000 + list.ID*4 + variant
 
 	nameA, nameB := langName(list.LangA), langName(list.LangB)
+	if list.Kind == "def" {
+		nameA, nameB = "Term", "Definition"
+	}
 	var tmpls []map[string]any
 	if o.Direction != "ba" {
 		tmpls = append(tmpls, ankiTemplate(len(tmpls), nameA+" → "+nameB, "A", "AudioA", nameA, "B", "AudioB", nameB))
