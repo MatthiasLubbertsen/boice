@@ -1,1 +1,47 @@
-# boice
+# Boice (book + voice)
+
+Learn vocab from your schoolbooks. Photograph a vocab table, fix what the OCR got wrong, say each word out loud, and export your own voice as one MP3, an Anki deck or a CSV.
+
+- **Scan**: a photo becomes word pairs (default German → Dutch). Every word is checked against Wiktionary, and unknown words get a suggested fix, so OCR mistakes stand out.
+- **Record**: words appear one by one; Boice detects when you stop talking and moves on (or use Space / tap). Redo, listen back, flag. Record German, Dutch or both, per list.
+- **Practice**: flashcards that play your recordings; missed cards come back.
+- **Filters**: unrecorded, recorded, flagged, to check, page range, search, shuffle, A→Z, reversed direction. Record, practice and export all use the current filter (or just the selected rows).
+- **Export**: MP3 (language order, thinking time, pauses, repeats), Anki `.apkg` (with your audio), CSV.
+
+Go backend (one static binary, SQLite, ~15 MB RAM idle) with an embedded React + shadcn/ui frontend. Dark only, yellow accent.
+
+## Run it
+
+Needs HTTPS in production (browsers only allow the microphone on HTTPS). See [compose.yaml](compose.yaml) for Boice + Tinyauth.
+
+```sh
+cp .env.example .env   # fill in the values
+docker compose up -d
+```
+
+| Variable | |
+|---|---|
+| `AUTH_MODE` | `oidc` (Tinyauth login), `forward` (trust a proxy header) or `none` (local use only) |
+| `BASE_URL` | public URL of Boice (OIDC redirect) |
+| `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` | from `tinyauth oidc create` |
+| `FORWARD_AUTH_HEADER` | header carrying the username in `forward` mode (default `Remote-User`) |
+| `HACKCLUB_AI_KEY` | key from ai.hackclub.com/dashboard. Server-side only. Without it, scanning is off |
+| `HACKCLUB_AI_MODEL` | vision model (default `google/gemini-3.8-flash`) |
+| `DICT_CHECK` | `off` disables the Wiktionary check |
+| `DATA_DIR`, `ADDR` | `/data` and `:8080` in the image |
+
+In `forward` mode the app must only be reachable through the proxy, otherwise anyone can send the header.
+
+## Develop
+
+```sh
+cd web && pnpm install && pnpm dev     # frontend on :5173, proxies /api to :8080
+AUTH_MODE=none go run .                # backend (needs web/dist to exist once: pnpm build)
+go test ./...
+```
+
+## Notes
+
+- Clips are stored as 44.1 kHz mono MP3 (encoded in the browser), so the server joins them for export without ffmpeg.
+- Each user only sees their own lists (matched by Tinyauth username).
+- The Hack Club AI API has a daily spending limit; the app shows a clear message when it is reached.

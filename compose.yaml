@@ -1,0 +1,45 @@
+# Boice + Tinyauth. Put both behind your reverse proxy (Caddy, Traefik, nginx…)
+# with HTTPS: browsers only allow microphone access on HTTPS, and Tinyauth's
+# OIDC server requires it.
+#
+#   boice.example.com → boice:8080
+#   auth.example.com  → tinyauth:3000
+#
+# Create the OIDC client first (prints a client id and secret for .env):
+#   docker run --rm ghcr.io/tinyauthapp/tinyauth:v5 oidc create boice
+
+services:
+  boice:
+    image: ghcr.io/matthiaslubbertsen/boice:latest
+    restart: unless-stopped
+    environment:
+      BASE_URL: https://boice.example.com
+      AUTH_MODE: oidc
+      OIDC_ISSUER: https://auth.example.com
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET}
+      HACKCLUB_AI_KEY: ${HACKCLUB_AI_KEY}
+      # HACKCLUB_AI_MODEL: google/gemini-3.8-flash
+    volumes:
+      - boice-data:/data
+    expose: ["8080"]
+    mem_limit: 128m
+
+  tinyauth:
+    image: ghcr.io/tinyauthapp/tinyauth:v5
+    restart: unless-stopped
+    environment:
+      TINYAUTH_APPURL: https://auth.example.com
+      # Generate with: docker run --rm -it ghcr.io/tinyauthapp/tinyauth:v5 user create --interactive
+      TINYAUTH_AUTH_USERS: ${TINYAUTH_USERS}
+      TINYAUTH_OIDC_CLIENTS_BOICE_CLIENTID: ${OIDC_CLIENT_ID}
+      TINYAUTH_OIDC_CLIENTS_BOICE_CLIENTSECRET: ${OIDC_CLIENT_SECRET}
+      TINYAUTH_OIDC_CLIENTS_BOICE_TRUSTEDREDIRECTURIS: https://boice.example.com/auth/callback
+      TINYAUTH_OIDC_CLIENTS_BOICE_NAME: Boice
+    volumes:
+      - tinyauth-data:/data
+    expose: ["3000"]
+
+volumes:
+  boice-data:
+  tinyauth-data:
