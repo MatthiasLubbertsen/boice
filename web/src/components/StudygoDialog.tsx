@@ -7,29 +7,12 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { StudygoBrowser } from '@/components/StudygoBrowser'
+import { StudygoSearch } from '@/components/StudygoSearch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Label } from '@/components/ui/label'
 import { api, errorMessage, type BrowseList, type StudygoList, type StudygoResult } from '@/lib/api'
+import { savedToken, saveToken } from '@/lib/studygoToken'
 import { plural } from '@/lib/words'
-
-const TOKEN_KEY = 'boice.studygo.token'
-
-function savedToken() {
-  try {
-    return localStorage.getItem(TOKEN_KEY) ?? ''
-  } catch {
-    return ''
-  }
-}
-
-function saveToken(token: string) {
-  try {
-    if (token) localStorage.setItem(TOKEN_KEY, token)
-    else localStorage.removeItem(TOKEN_KEY)
-  } catch {
-    /* private mode: just ask again next time */
-  }
-}
 
 /** Runs an import and reports the outcome. Returns true when nothing failed. */
 async function runImport(token: string, ids: number[], onImported: () => void): Promise<boolean> {
@@ -245,11 +228,15 @@ export function StudygoDialog({
         </DialogHeader>
         <Tabs defaultValue="browse" className="flex min-h-0 flex-1 flex-col gap-3">
           <TabsList className="w-full">
-            <TabsTrigger value="browse">Find in a book</TabsTrigger>
-            <TabsTrigger value="account">My account</TabsTrigger>
+            <TabsTrigger value="browse">Books</TabsTrigger>
+            <TabsTrigger value="search">Search</TabsTrigger>
+            <TabsTrigger value="account">Mine</TabsTrigger>
           </TabsList>
           <TabsContent value="browse" className="flex min-h-0 flex-1 flex-col gap-3">
             <BrowseTab onImported={onImported} onDone={() => onOpenChange(false)} />
+          </TabsContent>
+          <TabsContent value="search" className="flex min-h-0 flex-1 flex-col gap-3">
+            <StudygoSearch onImported={onImported} onDone={() => onOpenChange(false)} />
           </TabsContent>
           <TabsContent value="account" className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto">
             <AccountTab onImported={onImported} onDone={() => onOpenChange(false)} />

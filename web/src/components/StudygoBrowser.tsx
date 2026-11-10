@@ -254,7 +254,7 @@ function ChaptersView({ chapters, onOpen }: { chapters: BrowseFilter[]; onOpen: 
   )
 }
 
-function ListRow({ list, checked, onToggle }: { list: BrowseList; checked: boolean; onToggle: (on: boolean) => void }) {
+export function ListRow({ list, checked, onToggle }: { list: BrowseList; checked: boolean; onToggle: (on: boolean) => void }) {
   const [preview, setPreview] = useState<BrowsePreview | null>(null)
   const [open, setOpen] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -284,9 +284,10 @@ function ListRow({ list, checked, onToggle }: { list: BrowseList; checked: boole
           aria-label={`Select ${list.title}`}
         />
         <div className="min-w-0 flex-1">
-          <span className="block truncate">{list.paragraph || list.title}</span>
+          <span className="block truncate">{list.meta !== undefined ? list.title : list.paragraph || list.title}</span>
           <span className="block truncate text-xs text-muted-foreground">
-            {list.paragraph && list.title !== list.paragraph ? `${list.title} · ` : ''}
+            {list.meta ?? (list.paragraph && list.title !== list.paragraph ? `${list.title} · ` : '')}
+            {list.meta ? ' · ' : ''}
             {list.imported ? 'already imported' : plural(list.words, 'word')}
           </span>
         </div>
@@ -300,7 +301,7 @@ function ListRow({ list, checked, onToggle }: { list: BrowseList; checked: boole
             {preview.kind === 'def' ? 'Terms and definitions' : `${langName(preview.langA)} → ${langName(preview.langB)}`} ·{' '}
             {plural(preview.total, 'word')}
           </p>
-          <ul className="grid gap-1">
+          <ul className="grid max-h-56 gap-1 overflow-y-auto pr-1" aria-label="Words in this list">
             {preview.words.map((w, i) => (
               <li key={i} className="grid grid-cols-2 gap-3">
                 <span className="truncate">{w.term}</span>

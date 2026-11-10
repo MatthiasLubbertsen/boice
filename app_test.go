@@ -522,6 +522,19 @@ func fakeStudygo(t *testing.T) http.Handler {
 			"subject":{"id":23,"name":"duits"},
 			"locales":[{"language":{"code":"nl"}},{"language":{"code":"nl"}}]}`)
 	}))
+	mux.HandleFunc("GET /search", guard(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		if q.Get("search_terms") != "frans hoofdstuk 1" || q.Get("apply_default_filters") != "false" || q.Get("limit") != "20" {
+			t.Errorf("unexpected search: %v", q)
+		}
+		kind := "user"
+		if q.Get("type") == "official_lists" {
+			kind = "official"
+		}
+		_, _ = io.WriteString(w, `{"result_sections":[{"search_type":"`+q.Get("type")+`","total_count":10000,"results":[
+			{"id":185321117,"title":"`+kind+` list","word_count":22,"creator_name":"Wies","subject_name":"Frans","book_title":null,"book_chapter_nr":null,"book_paragraph_nr":null},
+			{"id":188480750,"title":"Other","word_count":3,"creator_name":null,"subject_name":null,"book_title":"Na Klar!","book_chapter_nr":"10","book_paragraph_nr":"0"}]}]}`)
+	}))
 	// Public, login-free endpoints (shapes as observed on the real site).
 	mux.HandleFunc("GET /public/search", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
@@ -687,5 +700,43 @@ func TestStudygoImport(t *testing.T) {
 	h.do("GET", "/api/lists", nil, &lists)
 	if len(lists) != 2 {
 		t.Fatalf("expected 2 lists, got %d", len(lists))
+	}
+}
+
+func TestStudygoSearch(t *testing.T) {
+	h := newHarness(t, Config{AuthMode: "none"}, nil)
+	sg := httptest.NewServer(fakeStudygo(t))
+	t.Cleanup(sg.Close)
+	h.app.studygoBase = sg.URL
+
+	var out struct {
+		Total int
+		More  bool
+		Lists []searchList
+		Error string
+	}
+	if code := h.do("POST", "/api/studygo/search", map[string]any{"q": "frans hoofdstuk 1"}, &out); code != 422 {
+		t.Fatalf("no token: %d", code)
+	}
+	if code := h.do("POST", "/api/studygo/search", map[string]any{"token": "good-token"}, nil); code != 400 {
+		t.Fatalf("empty query: %d", code)
+	}
+	if code := h.do("POST", "/api/studygo/search", map[string]any{"token": "bad", "q": "frans hoofdstuk 1"}, &out); code != 422 || out.Error == "" {
+		t.Fatalf("bad token: %d %+v", code, out)
+	}
+	body := map[string]any{"token": "good-token", "q": "  frans   hoofdstuk 1 ", "kind": "user"}
+	if code := h.do("POST", "/api/studygo/search", body, &out); code != 200 || len(out.Lists) != 2 {
+		t.Fatalf("search: %d %+v", code, out)
+	}
+	if l := out.Lists[0]; l.Title != "user list" || l.Words != 22 || l.Creator != "Wies" || l.Subject != "Frans" || l.Book != "" {
+		t.Fatalf("student list: %+v", l)
+	}
+	if l := out.Lists[1]; l.Book != "Na Klar!" || l.Chapter != "10" || l.Paragraph != "0" || l.Creator != "" {
+		t.Fatalf("book list: %+v", l)
+	}
+	body["kind"] = "official"
+	h.do("POST", "/api/studygo/search", body, &out)
+	if out.Lists[0].Title != "official list" {
+		t.Fatalf("official: %+v", out.Lists)
 	}
 }

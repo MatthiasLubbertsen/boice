@@ -590,6 +590,9 @@ func (a *App) handleStudygoChapter(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"id": id, "title": res.Chapter.Title, "book": res.Chapter.Book, "lists": lists})
 }
 
+// previewMax is how many words a preview carries; enough to recognise a list.
+const previewMax = 300
+
 type previewWord struct {
 	Term        string `json:"term"`
 	Translation string `json:"translation"`
@@ -615,11 +618,108 @@ func (a *App) handleStudygoPreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	words := []previewWord{}
-	for _, p := range pairs[:min(len(pairs), 8)] {
+	for _, p := range pairs[:min(len(pairs), previewMax)] {
 		words = append(words, previewWord{p[0], p[1]})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id": id, "title": cleanText(d.Title), "kind": kind, "langA": langA, "langB": langB,
 		"total": len(pairs), "words": words,
 	})
+}
+
+// ---- searching lists by name (needs the person's token) ----
+
+type searchList struct {
+	ID        int64  `json:"id"`
+	Title     string `json:"title"`
+	Words     int    `json:"words"`
+	Creator   string `json:"creator"`
+	Subject   string `json:"subject"`
+	Book      string `json:"book"`
+	Chapter   string `json:"chapter"`
+	Paragraph string `json:"paragraph"`
+	Imported  bool   `json:"imported"`
+	ListID    int64  `json:"listId,omitempty"`
+}
+
+const searchPageSize = 20
+
+// handleStudygoSearch looks lists up by name, among students' lists or the
+// publishers' official ones. Studygo's filter parameters do not work on this
+// call, so it is text search only.
+func (a *App) handleStudygoSearch(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Token  string `json:"token"`
+		Q      string `json:"q"`
+		Kind   string `json:"kind"` // "user" | "official"
+		Offset int    `json:"offset"`
+	}
+	if !readJSON(w, r, &in) {
+		return
+	}
+	token := cleanToken(in.Token)
+	q := limitRunes(cleanText(in.Q), 100)
+	if token == "" {
+		writeErr(w, http.StatusUnprocessableEntity, "Searching lists needs your Studygo token.")
+		return
+	}
+	if q == "" {
+		writeErr(w, http.StatusBadRequest, "Type something to search for.")
+		return
+	}
+	searchType := "user_lists"
+	if in.Kind == "official" {
+		searchType = "official_lists"
+	}
+	params := url.Values{
+		"type": {searchType}, "search_terms": {q}, "limit": {strconv.Itoa(searchPageSize)},
+		"apply_default_filters": {"false"},
+	}
+	if in.Offset > 0 && in.Offset <= 5000 {
+		params.Set("offset", strconv.Itoa(in.Offset))
+	}
+	var res struct {
+		Sections []struct {
+			Total   int `json:"total_count"`
+			Results []struct {
+				ID        json.Number `json:"id"`
+				Title     string      `json:"title"`
+				Words     int         `json:"word_count"`
+				Creator   string      `json:"creator_name"`
+				Subject   string      `json:"subject_name"`
+				Book      string      `json:"book_title"`
+				Chapter   json.Number `json:"book_chapter_nr"`
+				Paragraph json.Number `json:"book_paragraph_nr"`
+			} `json:"results"`
+		} `json:"result_sections"`
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	if err := a.studygo(token).get(ctx, "search?"+params.Encode(), &res); err != nil {
+		a.writeStudygoErr(w, err)
+		return
+	}
+	out := struct {
+		Total int          `json:"total"`
+		More  bool         `json:"more"`
+		Lists []searchList `json:"lists"`
+	}{Lists: []searchList{}}
+	if len(res.Sections) > 0 {
+		sec := res.Sections[0]
+		out.Total = sec.Total
+		for _, it := range sec.Results {
+			id, err := it.ID.Int64()
+			if err != nil || id <= 0 {
+				continue
+			}
+			sl := searchList{ID: id, Title: cleanText(it.Title), Words: it.Words, Creator: cleanText(it.Creator),
+				Subject: cleanText(it.Subject), Book: cleanText(it.Book), Chapter: it.Chapter.String(), Paragraph: it.Paragraph.String()}
+			if lid, ok := a.store.ListByStudygoID(userFrom(r).ID, id); ok {
+				sl.Imported, sl.ListID = true, lid
+			}
+			out.Lists = append(out.Lists, sl)
+		}
+		out.More = len(sec.Results) == searchPageSize && in.Offset+searchPageSize < 5000
+	}
+	writeJSON(w, http.StatusOK, out)
 }

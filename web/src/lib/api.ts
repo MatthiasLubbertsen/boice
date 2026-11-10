@@ -83,6 +83,21 @@ export interface BrowseList {
   words: number
   imported: boolean
   listId?: number
+  /** Shown under the title instead of the word count line, e.g. "by Wies · Frans". */
+  meta?: string
+}
+
+export interface SearchList {
+  id: number
+  title: string
+  words: number
+  creator: string
+  subject: string
+  book: string
+  chapter: string
+  paragraph: string
+  imported: boolean
+  listId?: number
 }
 
 export interface BrowsePreview {
@@ -211,6 +226,8 @@ export const api = {
       `/api/studygo/books?${p}`,
     )
   },
+  studygoSearch: (token: string, q: string, kind: 'user' | 'official', offset = 0) =>
+    json<{ total: number; more: boolean; lists: SearchList[] }>('POST', '/api/studygo/search', { token, q, kind, offset }),
   studygoBook: (id: number) => json<{ id: number; title: string; chapters: BrowseFilter[] }>('GET', `/api/studygo/books/${id}`),
   studygoChapter: (id: number) =>
     json<{ id: number; title: string; book: string; lists: BrowseList[] }>('GET', `/api/studygo/chapters/${id}`),

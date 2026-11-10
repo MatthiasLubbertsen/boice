@@ -47,6 +47,7 @@ func (a *App) routes() http.Handler {
 	api.HandleFunc("GET /api/studygo/books/{id}", a.handleStudygoBook)
 	api.HandleFunc("GET /api/studygo/chapters/{id}", a.handleStudygoChapter)
 	api.HandleFunc("GET /api/studygo/lists/{id}/preview", a.handleStudygoPreview)
+	api.HandleFunc("POST /api/studygo/search", a.handleStudygoSearch)
 	api.HandleFunc("POST /api/studygo/lists", a.handleStudygoLists)
 	api.HandleFunc("POST /api/studygo/import", a.handleStudygoImport)
 	api.HandleFunc("GET /api/subjects", a.handleSubjects)
