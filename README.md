@@ -2,11 +2,13 @@
 
 Learn vocab from your schoolbooks. Photograph a vocab table, fix what the OCR got wrong, say each word out loud, and export your own voice as one MP3, an Anki deck or a CSV.
 
-- **Scan**: a photo becomes word pairs (default German → Dutch). Every word is checked against Wiktionary, and unknown words get a suggested fix, so OCR mistakes stand out.
+- **Scan**: a photo becomes word pairs (default German → Dutch). Every word is checked against Wiktionary, and unknown words get a suggested fix, so OCR mistakes stand out. Photos are read in the background: upload, carry on, and review the result when it's ready. For "der Schüler | die Schülerinnen" style cells only the first form is kept.
+- **Terms & definitions**: lists don't have to be languages. A glossary page (term + definition, e.g. history) can be scanned, recorded and exported the same way. No dictionary check for these.
+- **Subjects**: group lists by school subject and link lists to them from the Subjects page.
 - **Record**: words appear one by one; Boice detects when you stop talking and moves on (or use Space / tap). Redo, listen back, flag. Record German, Dutch or both, per list.
 - **Practice**: flashcards that play your recordings; missed cards come back.
 - **Filters**: unrecorded, recorded, flagged, to check, page range, search, shuffle, A→Z, reversed direction. Record, practice and export all use the current filter (or just the selected rows).
-- **Export**: MP3 (language order, thinking time, pauses, repeats), Anki `.apkg` (with your audio), CSV.
+- **Export**: MP3 (language order, thinking time and pauses default to 0.5 s, repeats, optional shuffle), Anki `.apkg` (with your audio), CSV.
 
 Go backend (one static binary, SQLite, ~15 MB RAM idle) with an embedded React + shadcn/ui frontend. Dark only, yellow accent.
 

@@ -5,7 +5,7 @@ import { Link } from 'wouter'
 
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
-import { api, errorMessage, langName, type List, type Side, type Word } from '@/lib/api'
+import { api, errorMessage, sideName, type List, type Side, type Word } from '@/lib/api'
 import { player } from '@/lib/player'
 import { hasAudio, loadSession, textOf } from '@/lib/words'
 
@@ -176,7 +176,7 @@ export default function Practice({ listId }: { listId: number }) {
           <main className="flex flex-1 flex-col items-center justify-center gap-8 py-8 text-center">
             <div className="grid gap-4">
               <span className="text-xs font-medium tracking-widest text-muted-foreground uppercase">
-                {langName(promptSide === 'a' ? list.langA : list.langB)}
+                {sideName(list, promptSide)}
               </span>
               <span className="text-4xl leading-tight font-semibold tracking-tight text-balance break-words sm:text-6xl">
                 {textOf(word, promptSide)}
@@ -191,7 +191,7 @@ export default function Practice({ listId }: { listId: number }) {
               {revealed ? (
                 <div className="grid gap-3">
                   <span className="text-xs font-medium tracking-widest text-primary uppercase">
-                    {langName(answerSide === 'a' ? list.langA : list.langB)}
+                    {sideName(list, answerSide)}
                   </span>
                   <span className="text-3xl font-medium text-balance break-words text-primary sm:text-4xl">
                     {textOf(word, answerSide)}

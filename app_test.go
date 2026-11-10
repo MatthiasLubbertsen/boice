@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fakeClip is n valid 44.1 kHz mono frames.
@@ -219,17 +220,11 @@ func TestFullFlow(t *testing.T) {
 	}
 	base := fmt.Sprintf("/api/lists/%d", list.ID)
 
-	// Scan: a tiny valid PNG header is enough for content sniffing.
+	// Scan: a tiny valid PNG header is enough for content sniffing. Scans run
+	// in the background, so start one and wait for it.
 	png := append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 64)...)
-	var scan struct {
-		Page        int
-		DictChecked bool
-		Words       []scannedWord
-	}
-	if code := h.do("POST", base+"/scan", png, &scan); code != 200 {
-		t.Fatalf("scan: %d", code)
-	}
-	if scan.Page != 42 || !scan.DictChecked || len(scan.Words) != 3 {
+	scan := h.scanAndWait(base, png)
+	if scan.Status != "done" || scan.Page != 42 || !scan.DictChecked || len(scan.Words) != 3 {
 		t.Fatalf("scan result: %+v", scan)
 	}
 	w0 := scan.Words[0]
@@ -348,6 +343,92 @@ func TestFullFlow(t *testing.T) {
 	h.do("DELETE", base, nil, nil)
 	if code := h.do("GET", base, nil, nil); code != 404 {
 		t.Fatalf("deleted list still there: %d", code)
+	}
+}
+
+// scanAndWait starts a background scan and polls until it settles, then
+// removes it the way the app does after review.
+func (h *harness) scanAndWait(base string, img []byte) Scan {
+	h.t.Helper()
+	var started Scan
+	if code := h.do("POST", base+"/scans", img, &started); code != 202 || started.Status != "running" {
+		h.t.Fatalf("start scan: %d %+v", code, started)
+	}
+	for range 100 {
+		var scans []Scan
+		h.do("GET", base+"/scans", nil, &scans)
+		if len(scans) == 1 && scans[0].Status != "running" {
+			h.do("DELETE", fmt.Sprintf("/api/scans/%d", scans[0].ID), nil, nil)
+			return scans[0]
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	h.t.Fatal("scan never finished")
+	return Scan{}
+}
+
+func TestFirstForm(t *testing.T) {
+	for in, want := range map[string]string{
+		"der Schüler | die Schülerinnen": "der Schüler",
+		"die Lehrerin|die Lehrerinnen":   "die Lehrerin",
+		"das Haus":                       "das Haus",
+		"  das   Haus ":                  "das Haus",
+	} {
+		if got := firstForm(in); got != want {
+			t.Errorf("firstForm(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestDefinitionListsAndSubjects(t *testing.T) {
+	h := newHarness(t, Config{AuthMode: "none"}, fakeUpstream(t))
+
+	var sub Subject
+	if code := h.do("POST", "/api/subjects", map[string]string{"name": "  "}, nil); code != 400 {
+		t.Fatalf("blank subject: %d", code)
+	}
+	if code := h.do("POST", "/api/subjects", map[string]string{"name": "Geschiedenis"}, &sub); code != 201 || sub.Name != "Geschiedenis" {
+		t.Fatalf("create subject: %d %+v", code, sub)
+	}
+	var list List
+	in := map[string]any{"name": "§4.2", "kind": "def", "langA": "nl", "langB": "nl", "subjectId": sub.ID}
+	if code := h.do("POST", "/api/lists", in, &list); code != 201 || list.Kind != "def" || list.SubjectID == nil || *list.SubjectID != sub.ID {
+		t.Fatalf("create def list: %d %+v", code, list)
+	}
+	if code := h.do("POST", "/api/lists", map[string]any{"name": "x", "subjectId": 9999}, nil); code != 400 {
+		t.Fatalf("foreign subject accepted: %d", code)
+	}
+	if code := h.do("POST", "/api/lists", map[string]any{"name": "x", "kind": "poem"}, nil); code != 400 {
+		t.Fatalf("bad kind accepted: %d", code)
+	}
+
+	// A definition list is not checked against a dictionary.
+	png := append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 64)...)
+	scan := h.scanAndWait(fmt.Sprintf("/api/lists/%d", list.ID), png)
+	if scan.Status != "done" || len(scan.Words) != 3 {
+		t.Fatalf("def scan: %+v", scan)
+	}
+	for _, w := range scan.Words[1:] {
+		for _, is := range w.Issues {
+			if is.Side != "" {
+				t.Fatalf("dictionary issue on a definition list: %+v", w)
+			}
+		}
+	}
+
+	var subs []Subject
+	h.do("GET", "/api/subjects", nil, &subs)
+	if len(subs) != 1 || subs[0].ListCount != 1 {
+		t.Fatalf("subjects: %+v", subs)
+	}
+	// Unlink via the list, then delete the subject: the list survives.
+	h.do("PATCH", fmt.Sprintf("/api/lists/%d", list.ID), map[string]any{"subjectId": sub.ID}, &list)
+	if code := h.do("DELETE", fmt.Sprintf("/api/subjects/%d", sub.ID), nil, nil); code != 204 {
+		t.Fatalf("delete subject: %d", code)
+	}
+	var again List
+	if code := h.do("GET", fmt.Sprintf("/api/lists/%d", list.ID), nil, &struct{ List *List }{&again}); code != 200 || again.SubjectID != nil {
+		t.Fatalf("list after subject delete: %d %+v", code, again)
 	}
 }
 

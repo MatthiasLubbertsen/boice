@@ -20,7 +20,7 @@ import { Label } from '@/components/ui/label'
 import { Progress } from '@/components/ui/progress'
 import { Slider } from '@/components/ui/slider'
 import { Switch } from '@/components/ui/switch'
-import { api, errorMessage, langName, type List, type Side, type Word } from '@/lib/api'
+import { api, errorMessage, sideName, type List, type Side, type Word } from '@/lib/api'
 import { Mic } from '@/lib/audio'
 import { player } from '@/lib/player'
 import { hasAudio, loadSession, sidesFor, textOf } from '@/lib/words'
@@ -396,7 +396,7 @@ export default function Record({ listId }: { listId: number }) {
           className="grid w-full cursor-pointer gap-4 rounded-2xl px-2 py-6 text-center outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
           aria-label="Next word"
         >
-          <span className="text-xs font-medium tracking-widest text-primary uppercase">Say it in {langName(lang)}</span>
+          <span className="text-xs font-medium tracking-widest text-primary uppercase">{list.kind === 'def' ? `Say the ${sideName(list, step.side).toLowerCase()}` : `Say it in ${sideName(list, step.side)}`}</span>
           <span lang={lang} className="text-4xl leading-tight font-semibold tracking-tight text-balance break-words sm:text-6xl">
             {textOf(word, step.side)}
           </span>

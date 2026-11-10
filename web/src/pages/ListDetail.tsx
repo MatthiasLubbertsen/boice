@@ -21,7 +21,7 @@ import { Link, useLocation } from 'wouter'
 import { useMe } from '@/App'
 import { ExportDialog } from '@/components/ExportDialog'
 import { ListFormDialog } from '@/components/ListForm'
-import { ScanDialog } from '@/components/ScanDialog'
+import { ReviewDialog, ScanDialog, ScanTray, useScans } from '@/components/ScanDialog'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -47,7 +47,7 @@ import { Progress } from '@/components/ui/progress'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { WordRow, type RowActions } from '@/components/WordRow'
-import { api, errorMessage, langName, type List, type Word } from '@/lib/api'
+import { api, errorMessage, listKindLabel, sideCode, sideName, type List, type Scan, type Word } from '@/lib/api'
 import { applyView, defaultView, isRecorded, parsePairs, saveSession, type Order, type Status, type View } from '@/lib/words'
 
 const STATUS_LABELS: Record<Status, string> = {
@@ -68,6 +68,8 @@ export default function ListDetail({ listId }: { listId: number }) {
   const [selected, setSelected] = useState<Set<number>>(new Set())
   const [dialog, setDialog] = useState<'scan' | 'paste' | 'export' | 'settings' | 'delete' | null>(null)
   const [checking, setChecking] = useState(false)
+  const { scans, refresh: refreshScans } = useScans(listId)
+  const [reviewing, setReviewing] = useState<Scan | null>(null)
 
   useEffect(() => {
     api.list(listId).then(
@@ -191,7 +193,7 @@ export default function ListDetail({ listId }: { listId: number }) {
           <div className="min-w-0">
             <h1 className="truncate text-2xl font-semibold tracking-tight">{list.name}</h1>
             <p className="text-sm text-muted-foreground">
-              {langName(list.langA)} → {langName(list.langB)}
+              {listKindLabel(list)}
               {words.length > 0 && ` · ${recorded} of ${words.length} recorded`}
             </p>
           </div>
@@ -217,6 +219,12 @@ export default function ListDetail({ listId }: { listId: number }) {
         </div>
         {words.length > 0 && <Progress value={(recorded / words.length) * 100} className="h-1.5" />}
       </div>
+
+      <ScanTray
+        scans={scans}
+        onReview={setReviewing}
+        onDismiss={(sc) => api.deleteScan(sc.id).then(refreshScans, (e) => toast.error(errorMessage(e)))}
+      />
 
       {words.length === 0 ? (
         <div className="flex flex-col items-center gap-5 rounded-xl border border-dashed px-6 py-14 text-center">
@@ -327,9 +335,9 @@ export default function ListDetail({ listId }: { listId: number }) {
               onClick={() => set({ reversed: !view.reversed })}
               className="uppercase tabular-nums aria-pressed:border-primary/60 aria-pressed:text-primary"
             >
-              {view.reversed ? list.langB : list.langA}
+              {sideCode(list, view.reversed ? 'b' : 'a')}
               <ArrowLeftRightIcon />
-              {view.reversed ? list.langA : list.langB}
+              {sideCode(list, view.reversed ? 'a' : 'b')}
             </Button>
           </div>
 
@@ -354,7 +362,7 @@ export default function ListDetail({ listId }: { listId: number }) {
               ) : (
                 <span>
                   {filtered ? `${visible.length} of ${words.length} words` : `${words.length} words`}
-                  {view.reversed && ` · practising ${langName(list.langB)} → ${langName(list.langA)}`}
+                  {view.reversed && ` · practising ${sideName(list, 'b')} → ${sideName(list, 'a')}`}
                 </span>
               )}
             </div>
@@ -379,13 +387,25 @@ export default function ListDetail({ listId }: { listId: number }) {
       <AddWordForm list={list} lastPage={words.at(-1)?.page ?? 0} onAdded={(ws) => setWords((old) => [...old, ...ws])} />
 
       {me.scan && (
-        <ScanDialog
-          list={list}
-          existing={words}
-          open={dialog === 'scan'}
-          onOpenChange={(o) => setDialog(o ? 'scan' : null)}
-          onAdded={(ws) => setWords((old) => [...old, ...ws])}
-        />
+        <>
+          <ScanDialog
+            list={list}
+            open={dialog === 'scan'}
+            onOpenChange={(o) => setDialog(o ? 'scan' : null)}
+            onStarted={() => void refreshScans()}
+          />
+          <ReviewDialog
+            list={list}
+            existing={words}
+            scan={reviewing}
+            onClose={() => setReviewing(null)}
+            onAdded={(ws) => {
+              setWords((old) => [...old, ...ws])
+              setReviewing(null)
+              void refreshScans()
+            }}
+          />
+        </>
       )}
       <PasteDialog
         list={list}
@@ -455,16 +475,16 @@ function AddWordForm({ list, lastPage, onAdded }: { list: List; lastPage: number
           ref={termInput}
           value={term}
           onChange={(e) => setTerm(e.target.value)}
-          placeholder={`${langName(list.langA)} word`}
-          aria-label={`New ${langName(list.langA)} word`}
+          placeholder={list.kind === 'def' ? 'Term' : `${sideName(list, 'a')} word`}
+          aria-label={`New ${sideName(list, 'a').toLowerCase()}`}
           lang={list.langA}
           maxLength={300}
         />
         <Input
           value={translation}
           onChange={(e) => setTranslation(e.target.value)}
-          placeholder={`${langName(list.langB)} translation`}
-          aria-label={`New ${langName(list.langB)} translation`}
+          placeholder={list.kind === 'def' ? 'Definition' : `${sideName(list, 'b')} translation`}
+          aria-label={`New ${list.kind === 'def' ? 'definition' : 'translation'}`}
           lang={list.langB}
           maxLength={300}
         />
@@ -524,7 +544,7 @@ function PasteDialog({
         <DialogHeader>
           <DialogTitle>Paste a list</DialogTitle>
           <DialogDescription>
-            One pair per line: {langName(list.langA)} first, then {langName(list.langB)}, separated by a tab, “;” or “=”.
+            One pair per line: {sideName(list, 'a')} first, then {sideName(list, 'b')}, separated by a tab, “;” or “=”.
             Copying two columns from a spreadsheet works too.
           </DialogDescription>
         </DialogHeader>
