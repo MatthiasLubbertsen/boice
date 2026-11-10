@@ -1,0 +1,7 @@
+.git
+.github
+.claude
+data
+web/node_modules
+web/dist
+*.exe

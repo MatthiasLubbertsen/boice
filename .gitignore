@@ -1,0 +1,7 @@
+/data/
+/.claude/
+*.exe
+.env
+web/node_modules/
+web/dist/*
+!web/dist/.gitkeep
