@@ -92,20 +92,31 @@ export function loadSession(listId: number): Session | null {
   }
 }
 
+const SEPARATORS = ['\t', '=', ';', ' – ', ' - ', ',']
+
 /**
- * Parses pasted text: one pair per line, split by tab, "=", ";", " - " or ",".
- * Separators are tried in that order and only the first match splits the line,
- * so punctuation inside the translation (e.g. "term=a, b; c") is left alone.
+ * Parses pasted text: one pair per line. A single separator (tab, "=", ";",
+ * " - " or ",") is chosen for the whole paste: the one found on the most lines,
+ * earlier in the list winning ties. Every line is split on that separator only,
+ * so punctuation inside a translation (e.g. "term=a, b; c") is left alone.
  */
 export function parsePairs(text: string): { term: string; translation: string }[] {
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
+  let sep = ''
+  let best = 0
+  for (const s of SEPARATORS) {
+    const n = lines.filter((l) => l.includes(s)).length
+    if (n > best) {
+      best = n
+      sep = s
+    }
+  }
+  if (!sep) return []
+  const strip = (s: string) => s.trim().replace(/^"(.*)"$/, '$1').trim()
   const out: { term: string; translation: string }[] = []
-  for (const raw of text.split(/\r?\n/)) {
-    const line = raw.trim()
-    if (!line) continue
-    const sep = ['\t', '=', ';', ' – ', ' - ', ','].find((s) => line.includes(s))
-    if (!sep) continue
+  for (const line of lines) {
     const i = line.indexOf(sep)
-    const strip = (s: string) => s.trim().replace(/^"(.*)"$/, '$1').trim()
+    if (i < 0) continue
     const term = strip(line.slice(0, i))
     const translation = strip(line.slice(i + sep.length))
     if (term && translation) out.push({ term, translation })
