@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { plural } from '@/lib/words'
 import { api, errorMessage, listKindLabel, sideName, type Issue, type List, type Scan, type Word } from '@/lib/api'
 
 interface Row {
@@ -79,7 +80,7 @@ export function ScanDialog({
     setUploading(null)
     if (started > 0) {
       toast.success(
-        `${started === 1 ? 'Reading your photo' : `Reading ${started} photos`} in the background. Keep going, the words will be waiting.`,
+        `${started === 1 ? 'Reading your photo' : `Reading ${started} photos`} in the background. Keep going, the result will be waiting.`,
       )
       onStarted()
       onOpenChange(false)
@@ -203,7 +204,7 @@ export function ScanTray({
               {s.status === 'done'
                 ? s.words.length === 0
                   ? 'No entries found in a photo.'
-                  : `${s.words.length} ${s.words.length === 1 ? 'entry' : 'entries'} read${s.page ? ` from page ${s.page}` : ''}.`
+                  : `${plural(s.words.length, 'entry', 'entries')} read${s.page ? ` from page ${s.page}` : ''}.`
                 : s.error}
             </span>
             {s.status === 'done' && s.words.length > 0 && (
@@ -284,7 +285,7 @@ export function ReviewDialog({
       )
       await api.deleteScan(scan.id).catch(() => {})
       onAdded(words, scan)
-      toast.success(`Added ${words.length} ${words.length === 1 ? 'word' : 'words'}.`)
+      toast.success(`Added ${plural(words.length, 'word')}.`)
     } catch (e) {
       toast.error(errorMessage(e))
     } finally {
@@ -377,11 +378,11 @@ export function ReviewDialog({
           <div className="flex flex-col-reverse items-center gap-3 sm:flex-row">
             {openIssues > 0 && (
               <span className="text-sm text-warn">
-                {openIssues} {openIssues === 1 ? 'row' : 'rows'} to check
+                {plural(openIssues, 'row')} to check
               </span>
             )}
             <Button disabled={saving || chosen.length === 0} onClick={save} className="w-full sm:w-auto">
-              Add {chosen.length} {chosen.length === 1 ? 'word' : 'words'}
+              Add {plural(chosen.length, 'word')}
             </Button>
           </div>
         </DialogFooter>

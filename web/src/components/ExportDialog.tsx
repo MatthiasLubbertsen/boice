@@ -10,7 +10,7 @@ import { Slider } from '@/components/ui/slider'
 import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { api, errorMessage, sideName, type List, type Side, type Word } from '@/lib/api'
-import { formatDuration, hasAudio } from '@/lib/words'
+import { formatDuration, hasAudio, plural } from '@/lib/words'
 
 type Content = 'a' | 'b' | 'ab' | 'ba'
 
@@ -93,7 +93,7 @@ export function ExportDialog({
         <DialogHeader>
           <DialogTitle>Export</DialogTitle>
           <DialogDescription>
-            {words.length} {words.length === 1 ? 'word' : 'words'}, in the order shown in the list (the MP3 can be shuffled).
+            {plural(words.length, 'word')}, in the order shown in the list (the MP3 can be shuffled).
           </DialogDescription>
         </DialogHeader>
         <Tabs defaultValue="mp3" className="gap-5">
@@ -154,7 +154,7 @@ export function ExportDialog({
             <p className="text-sm text-muted-foreground">
               {withAudio.length === 0
                 ? 'None of these words has a recording in this language yet.'
-                : `${withAudio.length} of ${words.length} words have recordings · about ${formatDuration(totalMs)}`}
+                : `${withAudio.length} of ${plural(words.length, 'word')} ${withAudio.length === 1 ? 'has a recording' : 'have recordings'} · about ${formatDuration(totalMs)}`}
             </p>
             <DownloadButton format="mp3" label="Download MP3" disabled={withAudio.length === 0} />
           </TabsContent>

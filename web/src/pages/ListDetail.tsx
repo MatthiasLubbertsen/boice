@@ -48,7 +48,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Textarea } from '@/components/ui/textarea'
 import { WordRow, type RowActions } from '@/components/WordRow'
 import { api, errorMessage, listKindLabel, sideCode, sideName, type List, type Scan, type Word } from '@/lib/api'
-import { applyView, defaultView, isRecorded, parsePairs, saveSession, type Order, type Status, type View } from '@/lib/words'
+import { applyView, defaultView, isRecorded, parsePairs, plural, saveSession, type Order, type Status, type View } from '@/lib/words'
 
 const STATUS_LABELS: Record<Status, string> = {
   all: 'All words',
@@ -177,7 +177,7 @@ export default function ListDetail({ listId }: { listId: number }) {
     setSelected(new Set())
     try {
       await api.deleteWords(list.id, ids)
-      toast.success(`Deleted ${ids.length} ${ids.length === 1 ? 'word' : 'words'}.`)
+      toast.success(`Deleted ${plural(ids.length, 'word')}.`)
     } catch (e) {
       toast.error(errorMessage(e))
     }
@@ -361,7 +361,7 @@ export default function ListDetail({ listId }: { listId: number }) {
                 </>
               ) : (
                 <span>
-                  {filtered ? `${visible.length} of ${words.length} words` : `${words.length} words`}
+                  {filtered ? `${visible.length} of ${plural(words.length, 'word')}` : plural(words.length, 'word')}
                   {view.reversed && ` · practising ${sideName(list, 'b')} → ${sideName(list, 'a')}`}
                 </span>
               )}
@@ -429,7 +429,7 @@ export default function ListDetail({ listId }: { listId: number }) {
           <AlertDialogHeader>
             <AlertDialogTitle>Delete “{list.name}”?</AlertDialogTitle>
             <AlertDialogDescription>
-              This deletes its {words.length} words and all their recordings. It can’t be undone.
+              This deletes {words.length === 1 ? 'its 1 word' : `its ${words.length} words`} and all {words.length === 1 ? 'its recordings' : 'their recordings'}. It can’t be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -528,7 +528,7 @@ function PasteDialog({
         pairs.map((p) => ({ ...p, page: parseInt(page) || 0 })),
       )
       onAdded(words)
-      toast.success(`Added ${words.length} ${words.length === 1 ? 'word' : 'words'}.`)
+      toast.success(`Added ${plural(words.length, 'word')}.`)
       setText('')
       onOpenChange(false)
     } catch (e) {
@@ -567,7 +567,7 @@ function PasteDialog({
             />
           </label>
           <Button disabled={busy || pairs.length === 0} onClick={save}>
-            Add {pairs.length} {pairs.length === 1 ? 'word' : 'words'}
+            Add {plural(pairs.length, 'word')}
           </Button>
         </DialogFooter>
       </DialogContent>

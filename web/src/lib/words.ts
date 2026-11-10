@@ -113,3 +113,6 @@ export function formatDuration(ms: number) {
   const s = Math.round(ms / 1000)
   return s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`
 }
+
+/** "1 word", "2 words". */
+export const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`

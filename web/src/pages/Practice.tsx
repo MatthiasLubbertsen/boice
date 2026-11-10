@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
 import { api, errorMessage, sideName, type List, type Side, type Word } from '@/lib/api'
 import { player } from '@/lib/player'
-import { hasAudio, loadSession, textOf } from '@/lib/words'
+import { hasAudio, loadSession, plural, textOf } from '@/lib/words'
 
 /** Flashcards: see (and hear) the prompt, recall the answer, reveal, grade yourself. */
 export default function Practice({ listId }: { listId: number }) {
@@ -111,7 +111,7 @@ export default function Practice({ listId }: { listId: number }) {
         updated.forEach((w) => next.set(w.id, w))
         return next
       })
-      toast.success(`Flagged ${updated.length} ${updated.length === 1 ? 'word' : 'words'}.`)
+      toast.success(`Flagged ${plural(updated.length, 'word')}.`)
     } catch (e) {
       toast.error(errorMessage(e))
     }
@@ -136,7 +136,7 @@ export default function Practice({ listId }: { listId: number }) {
           </div>
           <div className="grid gap-2">
             <h1 className="text-2xl font-semibold tracking-tight">
-              {deck.length === 0 ? 'No words to practise' : `${deck.length} ${deck.length === 1 ? 'word' : 'words'} done`}
+              {deck.length === 0 ? 'No words to practise' : `${plural(deck.length, 'word')} done`}
             </h1>
             {deck.length > 0 && (
               <p className="text-muted-foreground">
