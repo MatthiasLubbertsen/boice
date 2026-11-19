@@ -163,6 +163,11 @@ func migrate(db *sql.DB) error {
 			return err
 		}
 	}
+	if !have["studygo_id"] {
+		if _, err := db.Exec(`ALTER TABLE lists ADD COLUMN studygo_id INTEGER`); err != nil {
+			return err
+		}
+	}
 	if !have["subject_id"] {
 		if _, err := db.Exec(`ALTER TABLE lists ADD COLUMN subject_id INTEGER REFERENCES subjects(id) ON DELETE SET NULL`); err != nil {
 			return err
@@ -548,4 +553,31 @@ func (s *Store) Scan(owner string, id int64) (Scan, error) {
 func (s *Store) DeleteScan(id int64) error {
 	_, err := s.db.Exec(`DELETE FROM scans WHERE id=?`, id)
 	return err
+}
+
+// Studygo import bookkeeping.
+
+// ListByStudygoID finds a list the caller already imported from Studygo.
+func (s *Store) ListByStudygoID(owner string, studygoID int64) (int64, bool) {
+	var id int64
+	err := s.db.QueryRow(`SELECT id FROM lists WHERE owner = ? AND studygo_id = ?`, owner, studygoID).Scan(&id)
+	return id, err == nil
+}
+
+func (s *Store) SetStudygoID(listID, studygoID int64) error {
+	_, err := s.db.Exec(`UPDATE lists SET studygo_id=? WHERE id=?`, studygoID, listID)
+	return err
+}
+
+// SubjectByName returns the caller's subject with that name (ignoring case), creating it if needed.
+func (s *Store) SubjectByName(owner, name string) (int64, error) {
+	var id int64
+	err := s.db.QueryRow(`SELECT id FROM subjects WHERE owner = ? AND name = ? COLLATE NOCASE`, owner, name).Scan(&id)
+	if err == nil {
+		return id, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return 0, err
+	}
+	return s.CreateSubject(owner, name)
 }

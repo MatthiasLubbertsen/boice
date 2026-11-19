@@ -44,6 +44,80 @@ export interface Scan {
   createdAt: number
 }
 
+export interface StudygoList {
+  id: number
+  title: string
+  words: number
+  own: boolean
+  imported: boolean
+  listId?: number
+}
+
+export interface StudygoResult {
+  id: number
+  title: string
+  status: 'imported' | 'exists' | 'error'
+  listId?: number
+  words: number
+  error?: string
+}
+
+export interface BrowseFilter {
+  id: number
+  name: string
+}
+
+export interface BrowseBook {
+  id: number
+  title: string
+  publisher: string
+  grade: string
+  edition: string
+  subject: string
+}
+
+export interface BrowseList {
+  id: number
+  title: string
+  paragraph: string
+  words: number
+  imported: boolean
+  listId?: number
+  /** Shown under the title instead of the word count line, e.g. "by Wies · Frans". */
+  meta?: string
+}
+
+export interface SearchList {
+  id: number
+  title: string
+  words: number
+  creator: string
+  subject: string
+  book: string
+  chapter: string
+  paragraph: string
+  imported: boolean
+  listId?: number
+}
+
+export interface BrowsePreview {
+  id: number
+  title: string
+  kind: ListKind
+  langA: string
+  langB: string
+  total: number
+  words: { term: string; translation: string }[]
+}
+
+export interface BrowseQuery {
+  subject?: number
+  track?: number
+  grade?: number
+  q?: string
+  offset?: number
+}
+
 export type ListFields = Pick<List, 'name' | 'langA' | 'langB' | 'recordMode' | 'kind' | 'subjectId'>
 
 export interface Word {
@@ -143,6 +217,24 @@ export const api = {
   startScan: (id: number, image: Blob) => json<Scan>('POST', `/api/lists/${id}/scans`, image),
   scans: (id: number) => json<Scan[]>('GET', `/api/lists/${id}/scans`),
   deleteScan: (id: number) => json<void>('DELETE', `/api/scans/${id}`),
+  studygoLists: (token: string) => json<{ lists: StudygoList[] }>('POST', '/api/studygo/lists', { token }),
+  studygoBooks: (query: BrowseQuery) => {
+    const p = new URLSearchParams()
+    for (const [k, v] of Object.entries(query)) if (v !== undefined && v !== '' && v !== 0) p.set(k, String(v))
+    return json<{ total: number; books: BrowseBook[]; subjects: BrowseFilter[]; levels: BrowseFilter[]; grades: string[] }>(
+      'GET',
+      `/api/studygo/books?${p}`,
+    )
+  },
+  studygoSearch: (token: string, q: string, kind: 'user' | 'official', offset = 0) =>
+    json<{ total: number; more: boolean; lists: SearchList[] }>('POST', '/api/studygo/search', { token, q, kind, offset }),
+  studygoBook: (id: number) => json<{ id: number; title: string; chapters: BrowseFilter[] }>('GET', `/api/studygo/books/${id}`),
+  studygoChapter: (id: number) =>
+    json<{ id: number; title: string; book: string; lists: BrowseList[] }>('GET', `/api/studygo/chapters/${id}`),
+  studygoPreview: (id: number) => json<BrowsePreview>('GET', `/api/studygo/lists/${id}/preview`),
+  /** An empty token imports public (publisher and shared) lists, which need no login. */
+  studygoImport: (token: string, ids: number[]) =>
+    json<{ results: StudygoResult[] }>('POST', '/api/studygo/import', { token, ids }),
   subjects: () => json<Subject[]>('GET', '/api/subjects'),
   createSubject: (name: string) => json<Subject>('POST', '/api/subjects', { name }),
   renameSubject: (id: number, name: string) => json<Subject>('PATCH', `/api/subjects/${id}`, { name }),

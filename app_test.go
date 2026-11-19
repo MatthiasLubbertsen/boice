@@ -480,3 +480,263 @@ func TestOIDCLogin(t *testing.T) {
 		t.Fatalf("after logout: %d", code)
 	}
 }
+
+// fakeStudygo serves the response shapes observed from the real Studygo site.
+func fakeStudygo(t *testing.T) http.Handler {
+	mux := http.NewServeMux()
+	guard := func(next http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("X-Auth-Token") != "good-token" {
+				w.WriteHeader(401)
+				_, _ = io.WriteString(w, `{"success":false,"error_type":"invalid_token"}`)
+				return
+			}
+			next(w, r)
+		}
+	}
+	mux.HandleFunc("GET /practiceable_items/created", guard(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"created_items":[
+			{"is_from_current_user":true,"item_count_display":"0 vragen","link":{"id":807096,"type":"user_quiz"},"title":"A quiz"},
+			{"id":181019509,"title":"Hoofdstuk 3","word_count_display":"2 woorden","status":"draft"}]}`)
+	}))
+	mux.HandleFunc("GET /recent_items", guard(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"recent_items":[
+			{"link":{"type":"user_quiz","id":804771},"title":"Quiz","item_count_display":"44 vragen"},
+			{"link":{"type":"list","id":185321117},"title":"Lektion 1.1","item_count_display":"3 woorden","is_from_current_user":false},
+			{"link":{"type":"list","id":181019509},"title":"Hoofdstuk 3","item_count_display":"2 woorden","is_from_current_user":true},
+			{"link":{"type":"topic","id":1757},"title":"Botten","item_count_display":"4 vragen"}],"total_count":4}`)
+	}))
+	mux.HandleFunc("GET /lists/185321117/data", guard(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"id":185321117,"title":"Hoofdstuk 4.Lektion 1.1","words_collection":[
+			{"words":["besuchen","bezoeken"]},
+			{"words":["das Getränk | die Getränke","het drankje"]},
+			{"words":["lonely"]},
+			{"words":["",""]}],
+			"subject":{"id":2,"name":"Duits"},
+			"locales":[{"language":{"code":"de"}},{"language":{"code":"nl"}}]}`)
+	}))
+	mux.HandleFunc("GET /lists/181019509/data", guard(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"id":181019509,"title":"Hoofdstuk 3","words_collection":[
+			{"words":["republiek","Een land waar geen koning of keizer aan het hoofd staat"]},
+			{"words":["senaat","Een vergadering die de Romeinse Republiek bestuurde"]}],
+			"subject":{"id":23,"name":"duits"},
+			"locales":[{"language":{"code":"nl"}},{"language":{"code":"nl"}}]}`)
+	}))
+	mux.HandleFunc("GET /search", guard(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		if q.Get("search_terms") != "frans hoofdstuk 1" || q.Get("apply_default_filters") != "false" || q.Get("limit") != "20" {
+			t.Errorf("unexpected search: %v", q)
+		}
+		kind := "user"
+		if q.Get("type") == "official_lists" {
+			kind = "official"
+		}
+		_, _ = io.WriteString(w, `{"result_sections":[{"search_type":"`+q.Get("type")+`","total_count":10000,"results":[
+			{"id":185321117,"title":"`+kind+` list","word_count":22,"creator_name":"Wies","subject_name":"Frans","book_title":null,"book_chapter_nr":null,"book_paragraph_nr":null},
+			{"id":188480750,"title":"Other","word_count":3,"creator_name":null,"subject_name":null,"book_title":"Na Klar!","book_chapter_nr":"10","book_paragraph_nr":"0"}]}]}`)
+	}))
+	// Public, login-free endpoints (shapes as observed on the real site).
+	mux.HandleFunc("GET /public/search", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		if q.Get("type") != "books" || q.Get("X-Auth-Token") != "" || r.Header.Get("X-Auth-Token") != "" {
+			t.Errorf("unexpected public search: %v token=%q", q, r.Header.Get("X-Auth-Token"))
+		}
+		title := "Na Klar!"
+		if q.Get("search_terms") == "neue" {
+			title = "Neue Kontakte"
+		}
+		_, _ = io.WriteString(w, `{"result_sections":[{"search_type":"books","total_count":54,
+			"available_filters":{"subject_id":[{"id":2,"name":"Duits"},{"id":3,"name":"Frans"}],
+			  "school_track_id":[{"section_name":"Nederland","school_tracks":[{"id":19,"name":"vwo"}]},{"section_name":"België","school_tracks":[{"id":99,"name":"aso"}]}],
+			  "grade_number":["1","2"]},
+			"results":[{"id":"1948","title":"`+title+`","publisher_name":"Malmberg","grade_display":"1/2 vwo","edition_number":5,"subject_name":"Duits"}]}]}`)
+	})
+	mux.HandleFunc("GET /public/books/1948", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"id":1948,"title":"Na Klar!","chapters":[{"id":20556,"title":"Kapitel 1: Berlin","title_number":"1"},{"id":20576,"title":"Kapitel 4: Wien"}]}`)
+	})
+	mux.HandleFunc("GET /public/chapters/20576", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"chapter":{"title":"Kapitel 4: Wien","book_name":"Na Klar!","lists":{
+			"highlighted":[{"id":185321117,"title":"Hoofdstuk 4.Lektion 1.1","paragraph_display":"Lektion 1.1","word_count_display":"22 woorden"}],
+			"other":[{"id":185321117,"title":"dupe","paragraph_display":"x","word_count_display":"1 woord"},{"id":5,"title":"Other","paragraph_display":"Lektion 2","word_count_display":"3 woorden"}]}}}`)
+	})
+	mux.HandleFunc("GET /public/lists/185321117", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Auth-Token") != "" {
+			t.Errorf("public list fetched with a token")
+		}
+		_, _ = io.WriteString(w, `{"id":185321117,"title":"Hoofdstuk 4.Lektion 1.1","subject":{"name":"Duits"},
+			"locales":[{"id":2,"locale":"de"},{"id":34,"locale":"nl-NL"}],
+			"words_with_performance":[
+			 {"words":["besuchen","bezoeken"],"all_results_performance":{}},
+			 {"words":["das Getränk | die Getränke","het drankje"]}]}`)
+	})
+	return mux
+}
+
+func TestStudygoBrowse(t *testing.T) {
+	h := newHarness(t, Config{AuthMode: "none"}, nil)
+	sg := httptest.NewServer(fakeStudygo(t))
+	t.Cleanup(sg.Close)
+	h.app.studygoBase = sg.URL
+
+	var books struct {
+		Total    int
+		Books    []browseBook
+		Subjects []browseFilter
+		Levels   []browseFilter
+		Grades   []string
+	}
+	if code := h.do("GET", "/api/studygo/books?subject=2&track=19&grade=1&q=neue&offset=24&subject=abc", nil, &books); code != 200 {
+		t.Fatalf("books: %d", code)
+	}
+	if books.Total != 54 || len(books.Books) != 1 || books.Books[0].ID != 1948 || books.Books[0].Title != "Neue Kontakte" ||
+		books.Books[0].Edition != "5" || len(books.Subjects) != 2 || len(books.Levels) != 1 || books.Levels[0].Name != "vwo" || len(books.Grades) != 2 {
+		t.Fatalf("books: %+v", books)
+	}
+	var book struct {
+		Chapters []browseFilter
+	}
+	h.do("GET", "/api/studygo/books/1948", nil, &book)
+	if len(book.Chapters) != 2 || book.Chapters[1].ID != 20576 {
+		t.Fatalf("chapters: %+v", book)
+	}
+	if code := h.do("GET", "/api/studygo/books/abc", nil, nil); code != 400 {
+		t.Fatalf("bad book id: %d", code)
+	}
+	var ch struct{ Lists []browseList }
+	h.do("GET", "/api/studygo/chapters/20576", nil, &ch)
+	if len(ch.Lists) != 2 || ch.Lists[0].Paragraph != "Lektion 1.1" || ch.Lists[0].Words != 22 || ch.Lists[1].ID != 5 {
+		t.Fatalf("lists: %+v", ch.Lists)
+	}
+	var pv struct {
+		Kind, LangA, LangB string
+		Total              int
+		Words              []previewWord
+	}
+	h.do("GET", "/api/studygo/lists/185321117/preview", nil, &pv)
+	if pv.Kind != "lang" || pv.LangA != "de" || pv.LangB != "nl" || pv.Total != 2 || pv.Words[1].Term != "das Getränk" {
+		t.Fatalf("preview: %+v", pv)
+	}
+
+	// Import without any token, then the chapter shows it as imported.
+	var imp struct{ Results []studygoResult }
+	if code := h.do("POST", "/api/studygo/import", map[string]any{"ids": []int64{185321117}}, &imp); code != 200 ||
+		imp.Results[0].Status != "imported" || imp.Results[0].Words != 2 {
+		t.Fatalf("public import: %d %+v", code, imp)
+	}
+	h.do("GET", "/api/studygo/chapters/20576", nil, &ch)
+	if !ch.Lists[0].Imported || ch.Lists[1].Imported {
+		t.Fatalf("imported flag: %+v", ch.Lists)
+	}
+}
+
+func TestStudygoImport(t *testing.T) {
+	h := newHarness(t, Config{AuthMode: "none"}, nil)
+	sg := httptest.NewServer(fakeStudygo(t))
+	t.Cleanup(sg.Close)
+	h.app.studygoBase = sg.URL
+
+	var out struct {
+		Lists []StudygoList
+		Error string
+	}
+	if code := h.do("POST", "/api/studygo/lists", map[string]string{"token": "bad"}, &out); code != 422 || out.Error == "" {
+		t.Fatalf("bad token: %d %+v", code, out)
+	}
+	if code := h.do("POST", "/api/studygo/lists", map[string]string{"token": " good-token "}, &out); code != 200 {
+		t.Fatalf("lists: %d", code)
+	}
+	// Quizzes and topics are left out, and a list in both indexes appears once.
+	if len(out.Lists) != 2 || out.Lists[0].ID != 181019509 || out.Lists[0].Words != 2 || !out.Lists[0].Own || out.Lists[1].ID != 185321117 || out.Lists[1].Own {
+		t.Fatalf("index: %+v", out.Lists)
+	}
+
+	var imp struct{ Results []studygoResult }
+	body := map[string]any{"token": "good-token", "ids": []int64{185321117, 181019509, 999}}
+	if code := h.do("POST", "/api/studygo/import", body, &imp); code != 200 || len(imp.Results) != 3 {
+		t.Fatalf("import: %d %+v", code, imp)
+	}
+	if r := imp.Results[0]; r.Status != "imported" || r.Words != 2 {
+		t.Fatalf("german list: %+v", r) // the one-sided and empty rows are dropped
+	}
+	if r := imp.Results[2]; r.Status != "error" || r.Error == "" {
+		t.Fatalf("unknown list should fail alone: %+v", r)
+	}
+
+	var de struct {
+		List  List
+		Words []Word
+	}
+	h.do("GET", fmt.Sprintf("/api/lists/%d", imp.Results[0].ListID), nil, &de)
+	if de.List.Kind != "lang" || de.List.LangA != "de" || de.List.LangB != "nl" || de.List.Name != "Hoofdstuk 4.Lektion 1.1" ||
+		de.Words[1].Term != "das Getränk" || de.Words[1].Translation != "het drankje" || de.Words[0].Term != "besuchen" {
+		t.Fatalf("german list wrong: %+v %+v", de.List, de.Words)
+	}
+	var hist struct {
+		List  List
+		Words []Word
+	}
+	h.do("GET", fmt.Sprintf("/api/lists/%d", imp.Results[1].ListID), nil, &hist)
+	if hist.List.Kind != "def" || hist.Words[0].Term != "republiek" || !strings.HasPrefix(hist.Words[0].Translation, "Een land") {
+		t.Fatalf("history list wrong: %+v %+v", hist.List, hist.Words)
+	}
+
+	// Subjects are created from Studygo's, matched ignoring case, and linked.
+	var subs []Subject
+	h.do("GET", "/api/subjects", nil, &subs)
+	if len(subs) != 1 || subs[0].Name != "Duits" || subs[0].ListCount != 2 {
+		t.Fatalf("subjects: %+v", subs)
+	}
+
+	// Importing again does not duplicate.
+	h.do("POST", "/api/studygo/import", map[string]any{"token": "good-token", "ids": []int64{185321117}}, &imp)
+	if imp.Results[0].Status != "exists" {
+		t.Fatalf("re-import: %+v", imp.Results)
+	}
+	h.do("POST", "/api/studygo/lists", map[string]string{"token": "good-token"}, &out)
+	if !out.Lists[0].Imported || !out.Lists[1].Imported {
+		t.Fatalf("imported flags: %+v", out.Lists)
+	}
+	var lists []List
+	h.do("GET", "/api/lists", nil, &lists)
+	if len(lists) != 2 {
+		t.Fatalf("expected 2 lists, got %d", len(lists))
+	}
+}
+
+func TestStudygoSearch(t *testing.T) {
+	h := newHarness(t, Config{AuthMode: "none"}, nil)
+	sg := httptest.NewServer(fakeStudygo(t))
+	t.Cleanup(sg.Close)
+	h.app.studygoBase = sg.URL
+
+	var out struct {
+		Total int
+		More  bool
+		Lists []searchList
+		Error string
+	}
+	if code := h.do("POST", "/api/studygo/search", map[string]any{"q": "frans hoofdstuk 1"}, &out); code != 422 {
+		t.Fatalf("no token: %d", code)
+	}
+	if code := h.do("POST", "/api/studygo/search", map[string]any{"token": "good-token"}, nil); code != 400 {
+		t.Fatalf("empty query: %d", code)
+	}
+	if code := h.do("POST", "/api/studygo/search", map[string]any{"token": "bad", "q": "frans hoofdstuk 1"}, &out); code != 422 || out.Error == "" {
+		t.Fatalf("bad token: %d %+v", code, out)
+	}
+	body := map[string]any{"token": "good-token", "q": "  frans   hoofdstuk 1 ", "kind": "user"}
+	if code := h.do("POST", "/api/studygo/search", body, &out); code != 200 || len(out.Lists) != 2 {
+		t.Fatalf("search: %d %+v", code, out)
+	}
+	if l := out.Lists[0]; l.Title != "user list" || l.Words != 22 || l.Creator != "Wies" || l.Subject != "Frans" || l.Book != "" {
+		t.Fatalf("student list: %+v", l)
+	}
+	if l := out.Lists[1]; l.Book != "Na Klar!" || l.Chapter != "10" || l.Paragraph != "0" || l.Creator != "" {
+		t.Fatalf("book list: %+v", l)
+	}
+	body["kind"] = "official"
+	h.do("POST", "/api/studygo/search", body, &out)
+	if out.Lists[0].Title != "official list" {
+		t.Fatalf("official: %+v", out.Lists)
+	}
+}
